@@ -100,6 +100,7 @@
 #include "../vwidgets/mouse_coordinates.h"
 #include "../vwidgets/vmaingraphicsscene.h"
 #include "../vwidgets/vwidgetpopup.h"
+#include "../seamly3d/workspace3dintegration.h"
 
 #include <QAbstractItemModel>
 #include <QInputDialog>
@@ -226,6 +227,7 @@ MainWindow::MainWindow(QWidget *parent)
         }
 
         createActions();
+        Seamly3D::Workspace3DIntegration::install(this); // Adds View > 3D Workspace.
         initializeScenes();
 
         // Create instance of VPattern (a dom document) that represents the XML documnet.
