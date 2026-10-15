@@ -58,7 +58,7 @@ public:
     explicit Viewport3D(QWidget *parent = nullptr);
     ~Viewport3D() override;
 
-    void        setMesh(const Mesh &mesh);
+    void        setMesh(const Mesh &mesh, bool frame = true);
     void        clearMesh();
     const Mesh &mesh() const;
 

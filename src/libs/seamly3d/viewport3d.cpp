@@ -96,11 +96,16 @@ Viewport3D::Viewport3D(QWidget *parent)
 //---------------------------------------------------------------------------------------------------------------------
 Viewport3D::~Viewport3D()
 {
+    // QOpenGLWidget destroys the context after our members are gone; it must not call back into cleanupGL() then.
+    if (context() != nullptr)
+    {
+        disconnect(context(), &QOpenGLContext::aboutToBeDestroyed, this, &Viewport3D::cleanupGL);
+    }
     cleanupGL();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void Viewport3D::setMesh(const Mesh &mesh)
+void Viewport3D::setMesh(const Mesh &mesh, bool frame)
 {
     m_mesh = mesh;
     if (m_mesh.normals.size() != m_mesh.positions.size())
@@ -108,7 +113,14 @@ void Viewport3D::setMesh(const Mesh &mesh)
         m_mesh.computeNormals();
     }
     m_meshDirty = true;
-    frameAll();
+    if (frame)
+    {
+        frameAll();
+    }
+    else
+    {
+        update();
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -27,12 +27,18 @@
 #include <QBuffer>
 #include <QtTest>
 
+#include "bodymeasurements.h"
 #include "mesh.h"
+#include "meshslicer.h"
 #include "objmeshreader.h"
+#include "objmeshwriter.h"
 #include "orbitcamera.h"
+#include "parametricbody.h"
 #include "polygontriangulator.h"
 
 using namespace Seamly3D;
+
+Q_DECLARE_METATYPE(Seamly3D::BodyMeasurements)
 
 namespace
 {
@@ -71,6 +77,53 @@ qreal trianglesArea(const QPolygonF &points, const QVector<quint32> &indices)
     return area;
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief isClosedSurface checks every edge is shared by exactly two triangles, in opposite directions. */
+bool isClosedSurface(const Mesh &mesh)
+{
+    QHash<QPair<quint32, quint32>, int> edges;
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            ++edges[qMakePair(mesh.indices.at(i + k), mesh.indices.at(i + (k + 1) % 3))];
+        }
+    }
+    for (auto it = edges.constBegin(); it != edges.constEnd(); ++it)
+    {
+        if (it.value() != 1 || edges.value(qMakePair(it.key().second, it.key().first)) != 1)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+float signedVolume(const Mesh &mesh)
+{
+    float volume = 0;
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        const QVector3D &a = mesh.positions.at(static_cast<int>(mesh.indices.at(i)));
+        const QVector3D &b = mesh.positions.at(static_cast<int>(mesh.indices.at(i + 1)));
+        const QVector3D &c = mesh.positions.at(static_cast<int>(mesh.indices.at(i + 2)));
+        volume += QVector3D::dotProduct(a, QVector3D::crossProduct(b, c));
+    }
+    return volume / 6.0f;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+BodyMeasurements makeBody(std::initializer_list<QPair<BodyMeasurement, double>> values)
+{
+    BodyMeasurements measurements;
+    for (const auto &value : values)
+    {
+        measurements.setValue(value.first, value.second);
+    }
+    return measurements;
+}
+
 const QByteArray unitCubeObj =
     "# unit cube\n"
     "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
@@ -105,6 +158,22 @@ private slots:
     void cameraFramesBounds();
     void cameraClampsPitchAndDistance();
     void cameraLooksAtTarget();
+
+    void sliceCube();
+    void sliceOpenStrip();
+
+    void measurementNamesAreUnique();
+    void scaleToHeight();
+    void sanitizedOrdersHeights();
+    void readVit();
+    void readVitRejectsOtherFiles();
+
+    void bodyFitsMeasurements_data();
+    void bodyFitsMeasurements();
+    void bodyIsClosedAndOutward();
+    void bodyFollowsMeasurementChanges();
+
+    void objWriteReadRoundTrip();
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -427,6 +496,281 @@ void TST_Seamly3D::cameraLooksAtTarget()
     camera.pan(0.1f, 0.0f);
     QVERIFY(camera.target().x() < 1.0f);
     QCOMPARE(camera.eye() - camera.target(), before);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::sliceCube()
+{
+    Mesh cube;
+    QVERIFY(readObj(unitCubeObj, cube));
+
+    const QVector<MeshSlicer::Contour> contours = MeshSlicer::sliceAtHeight(cube, 0.5f);
+    QCOMPARE(contours.size(), 1);
+    QVERIFY(contours.constFirst().closed);
+    QVERIFY(qFuzzyCompare(contours.constFirst().length(), 4.0));
+    QVERIFY(qFuzzyCompare(MeshSlicer::girthAtHeight(cube, 0.25f), 4.0));
+
+    // Through the bottom face's vertices and outside the mesh.
+    QVERIFY(qFuzzyCompare(MeshSlicer::girthAtHeight(cube, 1.0f), 4.0));
+    QCOMPARE(MeshSlicer::girthAtHeight(cube, 2.0f), 0.0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::sliceOpenStrip()
+{
+    // A vertical wall made of two triangles: the cut is an open line, not a girth.
+    Mesh wall;
+    wall.positions << QVector3D(0, 0, 0) << QVector3D(2, 0, 0) << QVector3D(2, 1, 0) << QVector3D(0, 1, 0);
+    wall.indices << 0 << 1 << 2 << 0 << 2 << 3;
+
+    const QVector<MeshSlicer::Contour> contours = MeshSlicer::sliceAtHeight(wall, 0.5f);
+    QCOMPARE(contours.size(), 1);
+    QVERIFY(!contours.constFirst().closed);
+    QVERIFY(qFuzzyCompare(contours.constFirst().length(), 2.0));
+    QCOMPARE(MeshSlicer::girthAtHeight(wall, 0.5f), 0.0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::measurementNamesAreUnique()
+{
+    QSet<QString> names;
+    for (int i = 0; i < BodyMeasurements::count(); ++i)
+    {
+        const auto measurement = static_cast<BodyMeasurement>(i);
+        QVERIFY(!BodyMeasurements::name(measurement).isEmpty());
+        QVERIFY(!BodyMeasurements::displayName(measurement).isEmpty());
+        QVERIFY(BodyMeasurements::defaultValue(measurement) > 0);
+        names.insert(BodyMeasurements::name(measurement));
+    }
+    QCOMPARE(names.size(), BodyMeasurements::count());
+
+    // The defaults are a consistent body.
+    QVERIFY(BodyMeasurements().sanitized() == BodyMeasurements());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::scaleToHeight()
+{
+    BodyMeasurements measurements;
+    measurements.scaleToHeight(BodyMeasurements::defaultValue(BodyMeasurement::Height) * 1.1);
+
+    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::WaistHeight),
+                          BodyMeasurements::defaultValue(BodyMeasurement::WaistHeight) * 1.1));
+    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::ArmLength),
+                          BodyMeasurements::defaultValue(BodyMeasurement::ArmLength) * 1.1));
+    // Girths are not lengths: they stay.
+    QCOMPARE(measurements.value(BodyMeasurement::WaistCirc),
+             BodyMeasurements::defaultValue(BodyMeasurement::WaistCirc));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::sanitizedOrdersHeights()
+{
+    // Waist entered above the bust, a negative knee and a zero girth.
+    const BodyMeasurements broken = makeBody({{BodyMeasurement::WaistHeight, 130},
+                                              {BodyMeasurement::KneeHeight, -4},
+                                              {BodyMeasurement::NeckCirc, 0}});
+    const BodyMeasurements fixed = broken.sanitized();
+
+    QVERIFY(fixed.value(BodyMeasurement::WaistHeight) < fixed.value(BodyMeasurement::BustpointHeight));
+    QVERIFY(fixed.value(BodyMeasurement::HipHeight) < fixed.value(BodyMeasurement::WaistHeight));
+    QVERIFY(fixed.value(BodyMeasurement::KneeHeight) > fixed.value(BodyMeasurement::CalfHeight));
+    QVERIFY(fixed.value(BodyMeasurement::AnkleHeight) > 0);
+    QCOMPARE(fixed.value(BodyMeasurement::NeckCirc), BodyMeasurements::defaultValue(BodyMeasurement::NeckCirc));
+
+    // A body that can not stand (ankle above the head) falls back to proportions.
+    const BodyMeasurements impossible = makeBody({{BodyMeasurement::Height, 150}, {BodyMeasurement::AnkleHeight, 200}});
+    const BodyMeasurements rebuilt = impossible.sanitized();
+    QVERIFY(rebuilt.value(BodyMeasurement::AnkleHeight) > 0);
+    QVERIFY(rebuilt.value(BodyMeasurement::AnkleHeight) < rebuilt.value(BodyMeasurement::CalfHeight));
+
+    // Generating from nonsense still gives a valid body.
+    QVERIFY(ParametricBody::generate(impossible).combined().isValid());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::readVit()
+{
+    const QByteArray vit = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+                           "<smis>\n"
+                           "  <version>0.3.4</version>\n"
+                           "  <read-only>false</read-only>\n"
+                           "  <unit>inch</unit>\n"
+                           "  <body-measurements>\n"
+                           "    <m name=\"height\" value=\"70\"/>\n"
+                           "    <m name=\"waist_circ\" value=\"30.5\"/>\n"
+                           "    <m name=\"hip_circ\" value=\"waist_circ + 8\"/>\n"
+                           "    <m name=\"@my_custom\" value=\"12\"/>\n"
+                           "  </body-measurements>\n"
+                           "</smis>\n";
+    QBuffer buffer;
+    buffer.setData(vit);
+    buffer.open(QIODevice::ReadOnly);
+
+    BodyMeasurements measurements;
+    QStringList applied;
+    QVERIFY2(measurements.readVit(&buffer, &applied), qPrintable(measurements.errorString()));
+    QCOMPARE(applied, QStringList({QStringLiteral("height"), QStringLiteral("waist_circ")}));
+
+    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::Height), 70 * 2.54));
+    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::WaistCirc), 30.5 * 2.54));
+
+    // Formulas are skipped (default stays) and missing heights follow the person's height.
+    QCOMPARE(measurements.value(BodyMeasurement::HipCirc), BodyMeasurements::defaultValue(BodyMeasurement::HipCirc));
+    const double scale = 70 * 2.54 / BodyMeasurements::defaultValue(BodyMeasurement::Height);
+    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::KneeHeight),
+                          BodyMeasurements::defaultValue(BodyMeasurement::KneeHeight) * scale));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::readVitRejectsOtherFiles()
+{
+    BodyMeasurements measurements;
+    const BodyMeasurements unchanged;
+
+    QBuffer pattern;
+    pattern.setData("<?xml version=\"1.0\"?><pattern><version>0.6.0</version></pattern>");
+    pattern.open(QIODevice::ReadOnly);
+    QVERIFY(!measurements.readVit(&pattern));
+    QVERIFY(!measurements.errorString().isEmpty());
+
+    QBuffer broken;
+    broken.setData("<smis><unit>cm</unit><body-measurements><m name=\"height\"");
+    broken.open(QIODevice::ReadOnly);
+    QVERIFY(!measurements.readVit(&broken));
+
+    QVERIFY(measurements == unchanged);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::bodyFitsMeasurements_data()
+{
+    QTest::addColumn<BodyMeasurements>("measurements");
+
+    QTest::newRow("default") << BodyMeasurements();
+
+    BodyMeasurements tall;
+    tall.scaleToHeight(192);
+    tall.setValue(BodyMeasurement::BustCirc, 108);
+    tall.setValue(BodyMeasurement::UnderbustCirc, 100);
+    tall.setValue(BodyMeasurement::WaistCirc, 94);
+    tall.setValue(BodyMeasurement::HipCirc, 104);
+    tall.setValue(BodyMeasurement::ShoulderWidth, 47);
+    QTest::newRow("tall") << tall;
+
+    BodyMeasurements petite;
+    petite.scaleToHeight(152);
+    petite.setValue(BodyMeasurement::BustCirc, 118);
+    petite.setValue(BodyMeasurement::UnderbustCirc, 98);
+    petite.setValue(BodyMeasurement::WaistCirc, 104);
+    petite.setValue(BodyMeasurement::HipCirc, 126);
+    petite.setValue(BodyMeasurement::ThighCirc, 72);
+    QTest::newRow("petite plus") << petite;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::bodyFitsMeasurements()
+{
+    QFETCH(BodyMeasurements, measurements);
+
+    const BodyModel body = ParametricBody::generate(measurements);
+    const BodyMeasurements &m = body.measurements;
+
+    const auto expectGirth = [&m](const Mesh &part, BodyMeasurement girth, float height)
+    {
+        const double measured = MeshSlicer::girthAtHeight(part, height);
+        const double expected = m.value(girth);
+        if (qAbs(measured - expected) > expected * 1e-4)
+        {
+            qWarning("%s: measured %f, expected %f", qPrintable(BodyMeasurements::name(girth)), measured, expected);
+            return false;
+        }
+        return true;
+    };
+    const auto h = [&m](BodyMeasurement measurement) { return static_cast<float>(m.value(measurement)); };
+
+    QVERIFY(expectGirth(body.torso, BodyMeasurement::BustCirc, h(BodyMeasurement::BustpointHeight)));
+    QVERIFY(expectGirth(body.torso, BodyMeasurement::UnderbustCirc, ParametricBody::underbustHeight(m)));
+    QVERIFY(expectGirth(body.torso, BodyMeasurement::WaistCirc, h(BodyMeasurement::WaistHeight)));
+    QVERIFY(expectGirth(body.torso, BodyMeasurement::HipCirc, h(BodyMeasurement::HipHeight)));
+    QVERIFY(expectGirth(body.torso, BodyMeasurement::NeckCirc, static_cast<float>(
+                                                                   m.value(BodyMeasurement::NeckBackHeight) * 0.8
+                                                                   + m.value(BodyMeasurement::Height) * 0.2)));
+
+    for (const Mesh *leg : {&body.leftLeg, &body.rightLeg})
+    {
+        QVERIFY(expectGirth(*leg, BodyMeasurement::ThighCirc, ParametricBody::thighHeight(m)));
+        QVERIFY(expectGirth(*leg, BodyMeasurement::KneeCirc, h(BodyMeasurement::KneeHeight)));
+        QVERIFY(expectGirth(*leg, BodyMeasurement::CalfCirc, h(BodyMeasurement::CalfHeight)));
+        QVERIFY(expectGirth(*leg, BodyMeasurement::AnkleCirc, h(BodyMeasurement::AnkleHeight)));
+    }
+
+    // Stands on the floor and is as tall as the person.
+    const Bounds3D bounds = body.combined().bounds();
+    QVERIFY(qAbs(bounds.minimum.y()) < 1e-4f);
+    QVERIFY(qFuzzyCompare(bounds.maximum.y(), h(BodyMeasurement::Height)));
+
+    // Symmetric about the YZ plane.
+    QVERIFY(qAbs(bounds.minimum.x() + bounds.maximum.x()) < 1e-3f);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::bodyIsClosedAndOutward()
+{
+    const BodyModel body = ParametricBody::generate(BodyMeasurements(), 24);
+    for (const Mesh *part : {&body.torso, &body.leftLeg, &body.rightLeg, &body.leftArm, &body.rightArm})
+    {
+        QVERIFY(part->isValid());
+        QVERIFY(isClosedSurface(*part));
+        QVERIFY(signedVolume(*part) > 0);
+    }
+    QVERIFY(body.combined().isValid());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::bodyFollowsMeasurementChanges()
+{
+    const BodyModel base = ParametricBody::generate(BodyMeasurements());
+
+    const BodyModel wideHips = ParametricBody::generate(makeBody({{BodyMeasurement::HipCirc, 120}}));
+    QVERIFY(wideHips.torso.bounds().size().x() > base.torso.bounds().size().x());
+
+    const BodyModel longArms = ParametricBody::generate(makeBody({{BodyMeasurement::ArmLength, 70}}));
+    QVERIFY(longArms.leftArm.bounds().minimum.y() < base.leftArm.bounds().minimum.y());
+
+    // Wider bust pushes the arms out so they do not cut into the body.
+    const BodyModel fullBust = ParametricBody::generate(makeBody({{BodyMeasurement::BustCirc, 130}}));
+    QVERIFY(fullBust.leftArm.bounds().maximum.x() > base.leftArm.bounds().maximum.x());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::objWriteReadRoundTrip()
+{
+    const Mesh original = ParametricBody::generate(BodyMeasurements(), 16).combined();
+
+    QBuffer buffer;
+    buffer.open(QIODevice::WriteOnly | QIODevice::Text);
+    ObjMeshWriter writer;
+    QVERIFY2(writer.write(&buffer, original), qPrintable(writer.errorString()));
+    buffer.close();
+
+    Mesh copy;
+    QString error;
+    QVERIFY2(readObj(buffer.data(), copy, &error), qPrintable(error));
+    QCOMPARE(copy.vertexCount(), original.vertexCount());
+    QCOMPARE(copy.triangleCount(), original.triangleCount());
+
+    // The reader numbers vertices in the order faces use them, so compare the triangles corner by corner.
+    for (int i = 0; i < original.indices.size(); ++i)
+    {
+        const QVector3D &expected = original.positions.at(static_cast<int>(original.indices.at(i)));
+        const QVector3D &actual = copy.positions.at(static_cast<int>(copy.indices.at(i)));
+        QVERIFY((actual - expected).length() < 1e-3f);
+    }
+
+    QBuffer empty;
+    empty.open(QIODevice::WriteOnly);
+    QVERIFY(!writer.write(&empty, Mesh()));
 }
 
 QTEST_GUILESS_MAIN(TST_Seamly3D)

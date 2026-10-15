@@ -3,6 +3,11 @@
 
 SOURCES += \
     $$PWD/mesh.cpp \
+    $$PWD/meshslicer.cpp \
+    $$PWD/bodymeasurements.cpp \
+    $$PWD/parametricbody.cpp \
+    $$PWD/objmeshwriter.cpp \
+    $$PWD/bodymeasurementspanel.cpp \
     $$PWD/objmeshreader.cpp \
     $$PWD/polygontriangulator.cpp \
     $$PWD/orbitcamera.cpp \
@@ -14,6 +19,11 @@ SOURCES += \
 
 HEADERS += \
     $$PWD/mesh.h \
+    $$PWD/meshslicer.h \
+    $$PWD/bodymeasurements.h \
+    $$PWD/parametricbody.h \
+    $$PWD/objmeshwriter.h \
+    $$PWD/bodymeasurementspanel.h \
     $$PWD/objmeshreader.h \
     $$PWD/polygontriangulator.h \
     $$PWD/orbitcamera.h \
