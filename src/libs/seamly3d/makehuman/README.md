@@ -26,7 +26,16 @@ corresponding source of these files has to be offered to those users.
 | `apps/human.py`: `_setGenderVals`, `_setAgeVals`, `_setWeightVals`, ... | `MakeHumanMacros::factors()` |
 | `apps/humanmodifier.py`: `getTargetWeights`, decr/incr modifier factors | `MakeHumanBody::setMacros()`, `setModifier()` |
 | `plugins/0_modeling_a_measurement.py`: `Ruler` vertex paths and measuring | `MakeHumanBody::measure()` |
-| `plugins/0_modeling_a_measurement.py`: bisection in `MeasurementValueConverter` | `MakeHumanFitter`: bisection for the macros; the measure modifiers are solved together with Newton steps; height scaling |
+| `plugins/0_modeling_a_measurement.py`: bisection in `MeasurementValueConverter` | `MakeHumanFitter`: bisection for the macros (the rest of the fitter is new) |
+
+New, not in MakeHuman:
+
+* `MakeHumanTape` measures every Seamly2D measurement on the body: landmark
+  heights, neck base, upper arm at armpit level, elbow, head, shoulder width.
+* The fitter solves all modifiers at once with regularized Levenberg-Marquardt,
+  instead of one slider at a time.
+* Modifiers can go to 1.5 times MakeHuman's slider range.
+* The generated shoulder slope target.
 
 ## The data pack
 
@@ -35,11 +44,19 @@ corresponding source of these files has to be offered to those users.
 
     python3 tools/build_makehuman_pack.py <makehuman checkout> share/makehuman_body.smh
 
-It holds the body part of `data/3dobjs/base.obj` and the adult ("young")
-universal, ethnic, height and breast macro targets, plus all `measure`
-targets: 13380 vertices, 13378 quads, 172 targets, 4.4 MB. Children,
-elderly bodies, proportions and the many detail targets (face, hands...)
-are left out to keep the pack small. Re-run the script with more targets to
-add them.
+It holds:
 
-SHA-256 of the pack: `b597ba0c40ffb4e5653d5a3dc41f7d20372e8ad9240580c4cb1642dfd66db55b`
+* the body part of `data/3dobjs/base.obj`;
+* the macro targets for every age (universal, ethnic, height, breast);
+* all `measure` targets;
+* the modeling targets the fitter uses: leg lengths, foot height, lower leg,
+  hip, waist, torso, neck and head scale, breast height, arm fat;
+* `seamly/shoulders-up|down`, made by the script from the default skeleton's
+  CC0 skinning weights (clavicle and arm bones), because MakeHuman has no
+  shoulder slope target.
+
+In total: 13380 vertices, 13378 quads, 536 targets, 7.0 MB. Index gaps and
+separate x, y, z planes make it compress to a third. Proportion targets
+and detail targets (face, hands...) are left out.
+
+SHA-256 of the pack: `89e735f6d80062688a361ec918bd8b053caa769f83127c8a513d724494eda3ef`

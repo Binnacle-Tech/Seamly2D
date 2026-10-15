@@ -37,6 +37,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QSlider;
+class QSpinBox;
 
 namespace Seamly3D
 {
@@ -80,6 +81,7 @@ private:
     QComboBox               *m_unitComboBox;
     QComboBox               *m_genderComboBox;
     QSlider                 *m_muscleSlider;
+    QSpinBox                *m_ageSpinBox;
     QCheckBox               *m_proportionalCheckBox;
     QLabel                  *m_sourceLabel;
     QString                  m_lastDirectory{};

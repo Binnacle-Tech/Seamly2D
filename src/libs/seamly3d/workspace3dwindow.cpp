@@ -38,8 +38,11 @@
 #include <QMenuBar>
 #include <QMessageBox>
 #include <QStatusBar>
+#include <QThread>
 #include <QTimer>
 #include <QToolBar>
+
+#include <memory>
 
 #include "bodymeasurementspanel.h"
 #include "meshslicer.h"
@@ -95,6 +98,16 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     resize(1200, 800);
 
     buildBody(true);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Workspace3DWindow::~Workspace3DWindow()
+{
+    if (m_fitThread != nullptr)
+    {
+        m_fitThread->wait();
+        delete m_fitThread;
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -195,23 +208,70 @@ void Workspace3DWindow::buildBody(bool frame)
     m_source = BodySource::Parametric;
     m_bodyModelPath.clear();
 
-    const BodyMeasurements measurements = m_measurementsPanel->measurements();
-    if (bodyKind() == BodyKind::Realistic)
+    if (bodyKind() == BodyKind::Realistic && !MakeHumanData::instance().isNull())
     {
-        QGuiApplication::setOverrideCursor(Qt::WaitCursor);
-        m_fit = MakeHumanFitter::fit(measurements);
-        QGuiApplication::restoreOverrideCursor();
-        if (m_fit.valid)
-        {
-            m_viewport->setMesh(m_fit.mesh, frame);
-            updateStatus();
-            return;
-        }
-        m_realisticError = m_fit.errorString;
+        startFit(frame);
+        return;
     }
 
-    m_body = ParametricBody::generate(measurements);
+    m_body = ParametricBody::generate(m_measurementsPanel->measurements());
     m_viewport->setMesh(m_body.combined(), frame);
+    updateStatus();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::startFit(bool frame)
+{
+    if (m_fitThread != nullptr)
+    {
+        // One fit at a time; the latest measurements are fitted when this one is done.
+        m_refitPending = true;
+        m_framePending = m_framePending || frame;
+        return;
+    }
+
+    m_statusLabel->setText(tr("Fitting the body to the measurements..."));
+
+    const BodyMeasurements measurements = m_measurementsPanel->measurements();
+    auto result = std::make_shared<MakeHumanFit>();
+    m_fitThread = QThread::create([measurements, result]() { *result = MakeHumanFitter::fit(measurements); });
+    connect(m_fitThread, &QThread::finished, this,
+            [this, result, frame]()
+            {
+                m_fitThread->deleteLater();
+                m_fitThread = nullptr;
+
+                if (m_refitPending)
+                {
+                    m_refitPending = false;
+                    const bool frameNext = frame || m_framePending;
+                    m_framePending = false;
+                    startFit(frameNext);
+                    return;
+                }
+
+                m_fit = *result;
+                if (!m_fit.valid)
+                {
+                    m_realisticError = m_fit.errorString;
+                    m_body = ParametricBody::generate(m_measurementsPanel->measurements());
+                    m_viewport->setMesh(m_body.combined(), frame);
+                    updateStatus();
+                    return;
+                }
+                showBody(frame);
+            });
+    m_fitThread->start();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::showBody(bool frame)
+{
+    if (m_source == BodySource::Imported || bodyKind() != BodyKind::Realistic)
+    {
+        return; // the user moved on while the fit was running
+    }
+    m_viewport->setMesh(m_fit.mesh, frame);
     updateStatus();
 }
 
@@ -309,17 +369,24 @@ void Workspace3DWindow::updateStatus()
 
     if (bodyKind() == BodyKind::Realistic && m_fit.valid)
     {
-        // Report how well the body fits, so the user can trust it (or see what is not fitted yet).
-        QStringList notFitted;
-        for (const BodyMeasurement measurement : m_fit.unfitted())
+        // Report how well the body fits, with every measurement in the tooltip.
+        QStringList lines;
+        for (const MakeHumanFit::Entry &entry : m_fit.entries)
         {
-            notFitted.append(BodyMeasurements::displayName(measurement));
+            if (!entry.fitted)
+            {
+                lines.append(tr("%1: not used for this body").arg(BodyMeasurements::displayName(entry.measurement)));
+                continue;
+            }
+            lines.append(tr("%1: %2 cm (wanted %3 cm)")
+                             .arg(BodyMeasurements::displayName(entry.measurement))
+                             .arg(entry.achieved, 0, 'f', 1)
+                             .arg(entry.target, 0, 'f', 1));
         }
         m_statusLabel->setText(tr("Realistic body fitted to %1 measurements, largest difference %2 cm.")
-                                   .arg(m_fit.entries.size() - notFitted.size())
+                                   .arg(m_fit.entries.size() - m_fit.unfitted().size())
                                    .arg(m_fit.maxError(), 0, 'f', 2));
-        m_statusLabel->setToolTip(tr("Not fitted yet (follow the body's natural proportions): %1")
-                                      .arg(notFitted.join(QLatin1String(", "))));
+        m_statusLabel->setToolTip(lines.join(QLatin1Char('\n')));
         return;
     }
     m_statusLabel->setToolTip(QString());

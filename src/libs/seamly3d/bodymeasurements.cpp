@@ -26,6 +26,7 @@
 
 #include "bodymeasurements.h"
 
+#include <QDate>
 #include <QFile>
 #include <QHash>
 #include <QIODevice>
@@ -42,68 +43,70 @@ struct MeasurementInfo
     BodyMeasurement      id;
     const char          *name;
     const char          *displayName;
-    double               defaultValue; // centimeters, average adult (about EU size 38-40, 168 cm)
+    double               defaultValue; // centimeters, see below
     BodyMeasurementGroup group;
 };
 
-// Order must match the BodyMeasurement enum.
+// Order must match the BodyMeasurement enum. The defaults are MakeHuman's average adult woman (25 years, average
+// weight and muscle) measured with MakeHumanTape and scaled to 168 cm, so the default body needs no reshaping and
+// measurements estimated from a height follow real proportions.
 const MeasurementInfo measurementInfo[] = {
     {BodyMeasurement::Height, "height", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height"), 168.0,
      BodyMeasurementGroup::Height},
     {BodyMeasurement::NeckBackHeight, "height_neck_back",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Neck Back"), 143.0, BodyMeasurementGroup::Height},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Neck Back"), 140.5, BodyMeasurementGroup::Height},
     {BodyMeasurement::ShoulderTipHeight, "height_shoulder_tip",
      QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Shoulder Tip"), 137.0, BodyMeasurementGroup::Height},
     {BodyMeasurement::ArmpitHeight, "height_armpit", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Armpit"),
-     124.0, BodyMeasurementGroup::Height},
+     126.0, BodyMeasurementGroup::Height},
     {BodyMeasurement::BustpointHeight, "height_bustpoint",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Bustpoint"), 121.0, BodyMeasurementGroup::Height},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Bustpoint"), 122.5, BodyMeasurementGroup::Height},
     {BodyMeasurement::WaistHeight, "height_waist_side",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Waist Side"), 105.0, BodyMeasurementGroup::Height},
-    {BodyMeasurement::HipHeight, "height_hip", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Hip"), 86.0,
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Waist Side"), 103.5, BodyMeasurementGroup::Height},
+    {BodyMeasurement::HipHeight, "height_hip", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Hip"), 85.5,
      BodyMeasurementGroup::Height},
     {BodyMeasurement::CrotchHeight, "leg_crotch_to_floor",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Crotch to floor"), 77.0, BodyMeasurementGroup::Height},
-    {BodyMeasurement::KneeHeight, "height_knee", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Knee"), 46.0,
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Crotch to floor"), 78.0, BodyMeasurementGroup::Height},
+    {BodyMeasurement::KneeHeight, "height_knee", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Knee"), 48.5,
      BodyMeasurementGroup::Height},
-    {BodyMeasurement::CalfHeight, "height_calf", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Calf"), 34.0,
+    {BodyMeasurement::CalfHeight, "height_calf", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Calf"), 34.5,
      BodyMeasurementGroup::Height},
     {BodyMeasurement::AnkleHeight, "height_ankle", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Height: Ankle"),
-     10.0, BodyMeasurementGroup::Height},
+     12.0, BodyMeasurementGroup::Height},
 
     {BodyMeasurement::HeadCirc, "head_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Head circumference"),
-     56.0, BodyMeasurementGroup::Girth},
+     59.0, BodyMeasurementGroup::Girth},
     {BodyMeasurement::NeckCirc, "neck_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Neck circumference"),
-     36.0, BodyMeasurementGroup::Girth},
+     35.5, BodyMeasurementGroup::Girth},
     {BodyMeasurement::BustCirc, "bust_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Bust circumference"),
-     92.0, BodyMeasurementGroup::Girth},
+     87.0, BodyMeasurementGroup::Girth},
     {BodyMeasurement::UnderbustCirc, "lowbust_circ",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Lowbust circumference"), 78.0, BodyMeasurementGroup::Girth},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Lowbust circumference"), 69.5, BodyMeasurementGroup::Girth},
     {BodyMeasurement::WaistCirc, "waist_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Waist circumference"),
-     72.0, BodyMeasurementGroup::Girth},
-    {BodyMeasurement::HipCirc, "hip_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Hip circumference"), 98.0,
+     75.0, BodyMeasurementGroup::Girth},
+    {BodyMeasurement::HipCirc, "hip_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Hip circumference"), 99.5,
      BodyMeasurementGroup::Girth},
     {BodyMeasurement::ThighCirc, "leg_thigh_upper_circ",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Thigh Upper circumference"), 56.0,
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Thigh Upper circumference"), 54.0,
      BodyMeasurementGroup::Girth},
     {BodyMeasurement::KneeCirc, "leg_knee_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Knee circumference"),
-     37.0, BodyMeasurementGroup::Girth},
+     36.0, BodyMeasurementGroup::Girth},
     {BodyMeasurement::CalfCirc, "leg_calf_circ", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Calf circumference"),
-     35.0, BodyMeasurementGroup::Girth},
+     37.5, BodyMeasurementGroup::Girth},
     {BodyMeasurement::AnkleCirc, "leg_ankle_circ",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Ankle circumference"), 22.0, BodyMeasurementGroup::Girth},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Leg: Ankle circumference"), 18.5, BodyMeasurementGroup::Girth},
 
     {BodyMeasurement::ShoulderWidth, "shoulder_tip_to_shoulder_tip_b",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Shoulder Tip to Shoulder Tip, back"), 38.0,
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Shoulder Tip to Shoulder Tip, back"), 37.5,
      BodyMeasurementGroup::Arm},
     {BodyMeasurement::ArmLength, "arm_shoulder_tip_to_wrist",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Shoulder Tip to Wrist"), 58.0, BodyMeasurementGroup::Arm},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Shoulder Tip to Wrist"), 49.0, BodyMeasurementGroup::Arm},
     {BodyMeasurement::UpperArmCirc, "arm_upper_circ",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Upper Arm circumference"), 28.0, BodyMeasurementGroup::Arm},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Upper Arm circumference"), 28.5, BodyMeasurementGroup::Arm},
     {BodyMeasurement::ElbowCirc, "arm_elbow_circ",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Elbow circumference"), 25.0, BodyMeasurementGroup::Arm},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Elbow circumference"), 24.5, BodyMeasurementGroup::Arm},
     {BodyMeasurement::WristCirc, "arm_wrist_circ",
-     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Wrist circumference"), 15.5, BodyMeasurementGroup::Arm},
+     QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm: Wrist circumference"), 13.0, BodyMeasurementGroup::Arm},
 };
 
 static_assert(sizeof(measurementInfo) / sizeof(measurementInfo[0]) == static_cast<size_t>(BodyMeasurement::Count),
@@ -183,6 +186,18 @@ void BodyMeasurements::setMuscle(double muscle)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+double BodyMeasurements::age() const
+{
+    return m_age;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void BodyMeasurements::setAge(double years)
+{
+    m_age = qBound(1.0, years, 90.0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void BodyMeasurements::scaleToHeight(double height)
 {
     const double current = value(BodyMeasurement::Height);
@@ -253,7 +268,7 @@ BodyMeasurements BodyMeasurements::sanitized() const
 bool BodyMeasurements::operator==(const BodyMeasurements &other) const
 {
     return m_values == other.m_values && qFuzzyCompare(m_gender + 1, other.m_gender + 1)
-           && qFuzzyCompare(m_muscle + 1, other.m_muscle + 1);
+           && qFuzzyCompare(m_muscle + 1, other.m_muscle + 1) && qFuzzyCompare(m_age, other.m_age);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -287,6 +302,7 @@ bool BodyMeasurements::readVit(QIODevice *device, QStringList *applied)
 
     QString unit = QStringLiteral("cm");
     QString gender;
+    QDate birthDate;
     QHash<BodyMeasurement, double> found;
     bool isIndividualFile = false;
 
@@ -309,6 +325,10 @@ bool BodyMeasurements::readVit(QIODevice *device, QStringList *applied)
         else if (xml.name() == QLatin1String("gender"))
         {
             gender = xml.readElementText().trimmed();
+        }
+        else if (xml.name() == QLatin1String("birth-date"))
+        {
+            birthDate = QDate::fromString(xml.readElementText().trimmed(), QStringLiteral("yyyy-MM-dd"));
         }
         else if (xml.name() == QLatin1String("m"))
         {
@@ -372,9 +392,21 @@ bool BodyMeasurements::readVit(QIODevice *device, QStringList *applied)
     }
     result.setMuscle(m_muscle);
 
+    // SeamlyMe writes 1800-01-01 when the birth date is unknown; only use plausible ages.
+    result.setAge(m_age);
+    if (birthDate.isValid())
+    {
+        const double years = birthDate.daysTo(QDate::currentDate()) / 365.25;
+        if (years >= 1.0 && years <= 90.0)
+        {
+            result.setAge(years);
+        }
+    }
+
     m_values = result.m_values;
     m_gender = result.m_gender;
     m_muscle = result.m_muscle;
+    m_age = result.m_age;
     if (applied != nullptr)
     {
         *applied = names;

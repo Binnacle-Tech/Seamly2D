@@ -40,6 +40,7 @@
 #include <QScrollArea>
 #include <QSignalBlocker>
 #include <QSlider>
+#include <QSpinBox>
 #include <QVBoxLayout>
 
 namespace Seamly3D
@@ -51,6 +52,7 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     , m_unitComboBox(new QComboBox(this))
     , m_genderComboBox(new QComboBox(this))
     , m_muscleSlider(new QSlider(Qt::Horizontal, this))
+    , m_ageSpinBox(new QSpinBox(this))
     , m_proportionalCheckBox(new QCheckBox(tr("Scale lengths with height"), this))
     , m_sourceLabel(new QLabel(this))
 {
@@ -100,6 +102,12 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     m_muscleSlider->setToolTip(tr("From soft to muscular"));
     connect(m_muscleSlider, &QSlider::valueChanged, this, &BodyMeasurementsPanel::buildEdited);
     buildForm->addRow(tr("Muscle tone:"), m_muscleSlider);
+    m_ageSpinBox->setParent(buildBox);
+    m_ageSpinBox->setRange(1, 90);
+    m_ageSpinBox->setSuffix(tr(" years"));
+    m_ageSpinBox->setKeyboardTracking(false);
+    connect(m_ageSpinBox, &QSpinBox::valueChanged, this, &BodyMeasurementsPanel::buildEdited);
+    buildForm->addRow(tr("Age:"), m_ageSpinBox);
     contentLayout->addWidget(buildBox);
 
     const QList<QPair<BodyMeasurementGroup, QString>> groups = {
@@ -227,6 +235,7 @@ void BodyMeasurementsPanel::buildEdited()
 
     m_measurements.setGender(m_genderComboBox->currentData().toDouble());
     m_measurements.setMuscle(m_muscleSlider->value() / 100.0);
+    m_measurements.setAge(m_ageSpinBox->value());
     emit measurementsChanged(m_measurements);
 }
 
@@ -249,6 +258,8 @@ void BodyMeasurementsPanel::updateSpinBoxes()
     {
         const QSignalBlocker genderBlocker(m_genderComboBox);
         const QSignalBlocker muscleBlocker(m_muscleSlider);
+        const QSignalBlocker ageBlocker(m_ageSpinBox);
+        m_ageSpinBox->setValue(qRound(m_measurements.age()));
         m_genderComboBox->setCurrentIndex(m_measurements.gender() < 0.5 ? 0 : 1);
         m_muscleSlider->setValue(qRound(m_measurements.muscle() * 100));
     }

@@ -38,6 +38,8 @@
 #include <QVector>
 #include <QVector3D>
 
+#include <array>
+
 #include "../mesh.h"
 
 class QIODevice;
@@ -47,19 +49,50 @@ namespace Seamly3D
 
 //---------------------------------------------------------------------------------------------------------------------
 /**
+ * @brief The macro values a target can depend on (lib/targets.py, _cat_data).
+ */
+enum class MacroValue : int
+{
+    Male, Female,
+    Baby, Child, Young, Old,
+    Caucasian, Asian, African,
+    MinMuscle, AverageMuscle, MaxMuscle,
+    MinWeight, AverageWeight, MaxWeight,
+    MinHeight, AverageHeight, MaxHeight,
+    MinCup, AverageCup, MaxCup,
+    MinFirmness, AverageFirmness, MaxFirmness,
+    UncommonProportions, RegularProportions, IdealProportions,
+    Count
+};
+
+using MacroFactors = std::array<double, static_cast<size_t>(MacroValue::Count)>;
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
  * @brief A morph target: per vertex offsets added to the base mesh with a weight.
  */
 struct MakeHumanTarget
 {
-    QString          name{};        ///< e.g. "macrodetails/universal-female-young-averagemuscle-averageweight"
-    QStringList      factors{};     ///< Macro values the weight depends on, e.g. {"female", "young", ...}
-    QVector<quint16> indices{};
+    QString            name{};      ///< e.g. "macrodetails/universal-female-young-averagemuscle-averageweight"
+    QVector<int>       factors{};   ///< MacroValue ids the weight depends on; empty for modifier targets
+    QVector<quint16>   indices{};
     QVector<QVector3D> deltas{};    ///< Decimeters, like the MakeHuman base mesh.
 };
 
 //---------------------------------------------------------------------------------------------------------------------
 /**
- * @brief The MakeHuman base body and targets, loaded from the bundled data pack (CC0 assets).
+ * @brief A modifier: a decrease and an increase target (or several, moved together) driven by one value.
+ */
+struct MakeHumanModifier
+{
+    QString            name{};
+    QVector<QVector3D> decrease{}; ///< Dense deltas over all vertices, applied with weight -value for value < 0
+    QVector<QVector3D> increase{}; ///< Dense deltas over all vertices, applied with weight value for value > 0
+};
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief The MakeHuman base body, targets and modifiers, loaded from the bundled data pack (CC0 assets).
  */
 class MakeHumanData
 {
@@ -73,9 +106,10 @@ public:
     /** @brief instance returns the bundled data, loaded on first use. Null if it can not be loaded. */
     static QSharedPointer<const MakeHumanData> instance(QString *error = nullptr);
 
-    QVector<QVector3D>      basePositions{};  ///< Decimeters, Y up, facing +Z.
-    QVector<quint32>        triangles{};      ///< The body quads split in two triangles each.
-    QVector<MakeHumanTarget> targets{};
+    QVector<QVector3D>         basePositions{};  ///< Decimeters, Y up, facing +Z.
+    QVector<quint32>           triangles{};      ///< The body quads split in two triangles each.
+    QVector<MakeHumanTarget>   targets{};
+    QVector<MakeHumanModifier> modifiers{};      ///< See modifierNames(); same order.
 
     int     indexOf(const QString &name) const;
     QString errorString() const;
@@ -83,7 +117,12 @@ public:
     /** @brief targetFactors extracts the macro values a target depends on from its name (like targets.py). */
     static QStringList targetFactors(const QString &name);
 
+    /** @brief modifierNames lists the modifiers: MakeHuman's measure modifiers and the modeling ones the fitter uses. */
+    static QStringList modifierNames();
+
 private:
+    bool buildModifiers();
+
     QHash<QString, int> m_index{};
     QString             m_errorString{};
 };
@@ -91,13 +130,11 @@ private:
 //---------------------------------------------------------------------------------------------------------------------
 /**
  * @brief Macro parameters of a MakeHuman body, all in [0, 1] (see human.py).
- *
- * Only adult targets are bundled, so age stays at 0.5 (25 years).
  */
 struct MakeHumanMacros
 {
     double gender{0.5};          ///< 0 female, 1 male
-    double age{0.5};
+    double age{0.5};             ///< 0 = 1 year, 0.1875 = 10 years, 0.5 = 25 years, 1 = 90 years
     double muscle{0.5};
     double weight{0.5};
     double height{0.5};
@@ -107,61 +144,62 @@ struct MakeHumanMacros
     double asian{1.0 / 3.0};
     double caucasian{1.0 / 3.0};
 
-    /** @brief factors returns the weight of every macro value ("female", "maxweight", ...), as human.py does. */
-    QHash<QString, double> factors() const;
+    /** @brief factors returns the weight of every macro value, as human.py computes them. */
+    MacroFactors factors() const;
+
+    double factor(MacroValue value) const;
+
+    static double ageFromYears(double years); ///< human.py setAgeYears
+    static double yearsFromAge(double age);   ///< human.py getAgeYears
 };
 
 //---------------------------------------------------------------------------------------------------------------------
 /**
- * @brief A MakeHuman body: the base mesh with macro targets and measure modifiers applied.
+ * @brief A MakeHuman body: the base mesh with macro targets and modifiers applied.
  *
- * Measure modifiers ("measure-waist-circ", ...) take negative values to apply the "decr" target and positive values
- * to apply the "incr" target, as humanmodifier.py does. MakeHuman's sliders stop at -1 and 1; values up to
- * modifierLimit extrapolate the targets linearly, so measurements a little outside MakeHuman's range can be reached.
+ * Modifier values are clamped to [-modifierLimit, modifierLimit]: negative values apply the decrease targets,
+ * positive values the increase targets, as humanmodifier.py does. MakeHuman's sliders stop at -1 and 1; going further
+ * extrapolates the targets linearly, so measurements a little outside MakeHuman's range can be reached.
  */
 class MakeHumanBody
 {
 public:
     explicit MakeHumanBody(const QSharedPointer<const MakeHumanData> &data);
 
+    static constexpr double modifierLimit = 1.5;
+
     void            setMacros(const MakeHumanMacros &macros);
     MakeHumanMacros macros() const;
 
-    static constexpr double modifierLimit = 2.0;
-
-    void            setModifier(const QString &name, double value); ///< Clamped to [-modifierLimit, modifierLimit].
+    void            setModifier(const QString &name, double value);
     double          modifier(const QString &name) const;
-    static QStringList modifierNames();
+    void            setModifierValues(const QVector<double> &values); ///< In MakeHumanData::modifierNames() order.
+    QVector<double> modifierValues() const;
 
     /** @brief measure returns a tape measure of the body in centimeters, along a MakeHuman ruler (see rulerNames()). */
     double          measure(const QString &ruler) const;
     static QStringList rulerNames();
+    static QVector<int> ruler(const QString &name);
 
     /** @brief heightCm returns the height of the body in centimeters (bounding box, like human.py). */
     double          heightCm() const;
 
-    /** @brief positions returns all body vertices in decimeters. */
-    QVector<QVector3D> positions() const;
+    QVector3D       position(int vertex) const;     ///< decimeters
+    QVector<QVector3D> positions() const;           ///< decimeters, all body vertices
 
     /**
      * @brief mesh returns the body in centimeters, scaled by @p scale, standing on the floor (y = 0) and facing +Z.
      */
     Mesh            mesh(double scale = 1.0) const;
 
-private:
-    QVector3D       position(int vertex) const;
+    const MakeHumanData &data() const;
 
+private:
     QSharedPointer<const MakeHumanData> m_data;
     MakeHumanMacros    m_macros{};
     QVector<QVector3D> m_macroPositions{};
-
-    struct Modifier
-    {
-        double             value{0};
-        QVector<QVector3D> decrease{}; ///< Dense deltas over all vertices.
-        QVector<QVector3D> increase{};
-    };
-    QHash<QString, Modifier> m_modifiers{};
+    QVector<double>    m_values{};
+    QVector<int>       m_active{}; ///< Indices of modifiers with a non zero value
 };
 
 } // namespace Seamly3D

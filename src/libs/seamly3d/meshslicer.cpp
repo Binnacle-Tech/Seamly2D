@@ -69,27 +69,39 @@ double MeshSlicer::Contour::length() const
 //---------------------------------------------------------------------------------------------------------------------
 QVector<MeshSlicer::Contour> MeshSlicer::sliceAtHeight(const Mesh &mesh, float height)
 {
+    return sliceByPlane(mesh, QVector3D(0, height, 0), QVector3D(0, 1, 0));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<MeshSlicer::Contour> MeshSlicer::sliceByPlane(const Mesh &mesh, const QVector3D &origin,
+                                                      const QVector3D &normal)
+{
     QHash<PointKey, QVector3D>        position;
     QHash<PointKey, QVector<PointKey>> neighbours;
 
+    const auto distance = [&](quint32 v)
+    { return QVector3D::dotProduct(mesh.positions.at(static_cast<int>(v)) - origin, normal); };
+
     // Vertices exactly on the plane count as above it; a cut through such a vertex lands on the vertex itself.
-    const auto above = [&](quint32 v) { return mesh.positions.at(static_cast<int>(v)).y() >= height; };
+    const auto above = [&](quint32 v) { return distance(v) >= 0; };
 
     const auto cutPoint = [&](quint32 a, quint32 b) -> PointKey
     {
         const QVector3D &pa = mesh.positions.at(static_cast<int>(a));
         const QVector3D &pb = mesh.positions.at(static_cast<int>(b));
-        if (pa.y() == height)
+        const float da = distance(a);
+        const float db = distance(b);
+        if (da == 0)
         {
             position.insert(vertexKey(a), pa);
             return vertexKey(a);
         }
-        if (pb.y() == height)
+        if (db == 0)
         {
             position.insert(vertexKey(b), pb);
             return vertexKey(b);
         }
-        const float t = (height - pa.y()) / (pb.y() - pa.y());
+        const float t = da / (da - db);
         const PointKey key = edgeKey(a, b);
         position.insert(key, pa + (pb - pa) * t);
         return key;
@@ -182,8 +194,14 @@ QVector<MeshSlicer::Contour> MeshSlicer::sliceAtHeight(const Mesh &mesh, float h
 //---------------------------------------------------------------------------------------------------------------------
 double MeshSlicer::girthAtHeight(const Mesh &mesh, float height)
 {
+    return longestClosedLength(sliceAtHeight(mesh, height));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double MeshSlicer::longestClosedLength(const QVector<Contour> &contours)
+{
     double girth = 0;
-    for (const Contour &contour : sliceAtHeight(mesh, height))
+    for (const Contour &contour : contours)
     {
         if (contour.closed)
         {

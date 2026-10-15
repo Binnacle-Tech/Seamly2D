@@ -36,6 +36,7 @@
 class QAction;
 class QComboBox;
 class QLabel;
+class QThread;
 class QTimer;
 
 namespace Seamly3D
@@ -58,7 +59,7 @@ class Workspace3DWindow : public QMainWindow
 
 public:
     explicit Workspace3DWindow(QWidget *parent = nullptr);
-    ~Workspace3DWindow() override = default;
+    ~Workspace3DWindow() override;
 
     Viewport3D            *viewport() const;
     BodyMeasurementsPanel *measurementsPanel() const;
@@ -83,6 +84,8 @@ private:
     void        createActions();
     void        updateStatus();
     void        buildBody(bool frame);
+    void        startFit(bool frame);
+    void        showBody(bool frame);
     BodyKind    bodyKind() const;
 
     Viewport3D            *m_viewport;
@@ -95,6 +98,9 @@ private:
     BodyModel   m_body{};          ///< Simple mannequin
     MakeHumanFit m_fit{};          ///< Realistic body
     QString     m_realisticError{};
+    QThread    *m_fitThread{nullptr};   ///< Fits run in the background so typing stays responsive
+    bool        m_refitPending{false};  ///< Measurements changed while a fit was running
+    bool        m_framePending{false};
     QString     m_bodyModelPath{};
     QString     m_lastDirectory{};
 };

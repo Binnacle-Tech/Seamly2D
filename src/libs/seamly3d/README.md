@@ -54,21 +54,45 @@ toolbar chooses between two body models.
 
 ### Realistic (MakeHuman), the default
 
-* Gender and muscle tone come from the panel; age is adult.
-* MakeHuman's height macro, then its weight macro (overall build from bust,
-  waist and hip), then for female bodies its breast size macro (bust minus
-  lowbust) are searched by bisection. A uniform scale makes the height exact.
-* MakeHuman's measure modifiers then adjust each girth until it matches
-  within 0.05 cm along MakeHuman's own tape paths: neck, bust, lowbust,
-  waist, hip, thigh, knee, calf, ankle, upper arm and wrist, plus arm length.
-  The modifiers affect each other (bust and lowbust a lot), so they are solved
-  together with Newton steps. A fit takes about 20 ms in a release build.
-* Modifiers may go up to twice MakeHuman's slider range (targets
-  extrapolated linearly) to reach measurements outside it, such as a 36 cm
-  neck on a female body.
-* The status bar shows how closely the body fits. Its tooltip lists the
-  measurements that aren't fitted yet (the vertical landmarks other than
-  height, head, shoulder width); those follow MakeHuman's natural proportions.
+Every measurement in the panel is fitted: all heights, all girths, shoulder
+width, arm length and head circumference.
+
+* **Build:** body shape (female/male), muscle tone and age (1 to 90 years) come
+  from the panel. The age can also come from the `.vit` file's birth date.
+* **Overall shape:** MakeHuman's height, weight and (for women) cup size
+  macros are found by bisection. A uniform scale then makes the height exact.
+* **Every measurement together:** the fitter solves all modifiers at once
+  with damped least squares (Levenberg-Marquardt), comparing measurements
+  taken by `MakeHumanTape`. The modifiers are MakeHuman's measure modifiers,
+  the modeling targets for leg, hip, torso, neck and head proportions, arm fat,
+  and a shoulder-slope target generated from the skeleton weights.
+* **Natural over extreme:** each modifier pays a small cost for moving, and
+  landmark heights count half as much as girths. Measurements that agree with
+  a human body fit within about 0.1 cm (girths) and 0.3 cm (heights).
+  Inconsistent ones are matched as far as a natural body allows, without
+  creases. The status bar shows the largest difference, and its tooltip has
+  every measurement, wanted and achieved.
+* **Children** (under 13) get a flat chest; their lowbust and bustpoint
+  aren't used.
+* **Speed:** a fit takes 0.15 to 0.6 s in a release build. It runs in the
+  background, so typing stays responsive.
+
+How `MakeHumanTape` measures, following the Seamly2D definitions:
+
+| Measurement | On the body |
+|-------------|-------------|
+| Heights | Floor to: the nape, shoulder tips, armpit (where a level cut first separates the arm), bust point (most forward point of the bust), side of the waist and hip loops, crotch (where the legs separate), level of the knee, calf and ankle loops |
+| Neck | Around the neck base, touching the nape, the neck sides and the front of the neck base |
+| Bust, lowbust, waist, hip, thigh, knee, calf, ankle, wrist | MakeHuman's tape loops |
+| Upper arm | Cut square to the upper arm just below the armpit |
+| Elbow | Cut square to the forearm through the elbow |
+| Head | Level cut through its widest part |
+| Shoulder width | Shoulder tip to shoulder tip along the back |
+| Arm length | Shoulder tip to elbow to wrist (MakeHuman's arm rulers) |
+
+The default measurements are MakeHuman's average woman (25 years), measured
+this way and scaled to 168 cm, so the default body needs no reshaping. When
+you change only the height, the other lengths follow real proportions.
 
 ### Simple mannequin
 
@@ -121,9 +145,10 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [x] Body generated from measurements, with exact girths
    - [x] Measurements from SeamlyMe `.vit`, cm or inch
    - [x] OBJ import and export
-   - [x] Realistic body: MakeHuman base mesh and targets fitted to the girths
-   - [ ] Fit the vertical landmarks (waist, hip, knee heights) and shoulder
-     width with MakeHuman's length modifiers, and the head
+   - [x] Realistic body: MakeHuman base mesh and targets fitted to every
+     measurement in the panel, all ages from 1 to 90
+   - [ ] More measurements from the Seamly2D database (highbust, across
+     chest/back, waist lengths, crotch length...)
    - [ ] More landmarks: across back and chest, front and back waist length,
      bust point spacing, posture and asymmetry
    - [ ] Units for imported models, and fitting an imported scan to measurements

@@ -36,8 +36,8 @@ namespace Seamly3D
 {
 
 /**
- * @brief Cuts meshes with horizontal planes. This is how girths are measured on a body: the length of the closed loop
- * where the plane y = height cuts the surface, exactly like a tape measure held level.
+ * @brief Cuts meshes with planes. This is how girths are measured on a body: the length of the closed loop where the
+ * plane y = height cuts the surface, exactly like a tape measure held level (or held across a limb).
  */
 class MeshSlicer
 {
@@ -52,6 +52,12 @@ public:
     };
 
     static QVector<Contour> sliceAtHeight(const Mesh &mesh, float height);
+
+    /** @brief sliceByPlane cuts with any plane, given by a point on it and its normal (needs not be unit length). */
+    static QVector<Contour> sliceByPlane(const Mesh &mesh, const QVector3D &origin, const QVector3D &normal);
+
+    /** @brief longestClosedLength returns the length of the longest closed contour, or 0 if there is none. */
+    static double longestClosedLength(const QVector<Contour> &contours);
 
     /** @brief girthAtHeight returns the length of the longest closed loop at @p height, or 0 if there is none. */
     static double girthAtHeight(const Mesh &mesh, float height);

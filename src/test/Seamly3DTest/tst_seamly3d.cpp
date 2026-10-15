@@ -25,6 +25,8 @@
  *****************************************************************************/
 
 #include <QBuffer>
+#include <QDate>
+#include <QElapsedTimer>
 #include <QtTest>
 
 #include "bodymeasurements.h"
@@ -186,6 +188,10 @@ private slots:
     void makeHumanModifiersChangeMeasures();
     void makeHumanFit_data();
     void makeHumanFit();
+    void makeHumanFitDefaultMeasurements();
+    void makeHumanTapeMeasuresEverything();
+    void readVitBirthDate();
+    void sliceByPlane();
     void makeHumanFitUnreachable();
     void makeHumanGenderChangesShape();
 };
@@ -810,13 +816,22 @@ void TST_Seamly3D::makeHumanDataLoads()
 
     QCOMPARE(data->basePositions.size(), 13380);
     QCOMPARE(data->triangles.size(), 13378 * 6);
-    QVERIFY(data->targets.size() > 100);
+    QVERIFY(data->targets.size() > 500);
 
-    // Every measure modifier and its ruler are there.
-    for (const QString &name : MakeHumanBody::modifierNames())
+    // Every modifier is built, and every ruler has its measure modifier.
+    QCOMPARE(data->modifiers.size(), MakeHumanData::modifierNames().size());
+    for (const QString &ruler : MakeHumanBody::rulerNames())
     {
-        QVERIFY2(data->indexOf(QStringLiteral("measure/") + name + QStringLiteral("-incr")) >= 0, qPrintable(name));
-        QVERIFY2(data->indexOf(QStringLiteral("measure/") + name + QStringLiteral("-decr")) >= 0, qPrintable(name));
+        QVERIFY2(MakeHumanData::modifierNames().contains(ruler), qPrintable(ruler));
+    }
+
+    // Macro targets for every age are bundled.
+    for (const QString &age : {QStringLiteral("baby"), QStringLiteral("child"), QStringLiteral("young"),
+                               QStringLiteral("old")})
+    {
+        QVERIFY2(data->indexOf(QStringLiteral("macrodetails/universal-female-") + age
+                               + QStringLiteral("-averagemuscle-averageweight")) >= 0,
+                 qPrintable(age));
     }
 
     // A damaged pack is rejected, not half loaded.
@@ -845,23 +860,28 @@ void TST_Seamly3D::makeHumanMacroFactors()
 {
     // Values from human.py for the default human and a few settings.
     MakeHumanMacros macros;
-    QHash<QString, double> f = macros.factors();
-    QCOMPARE(f.value(QStringLiteral("female")), 0.5);
-    QCOMPARE(f.value(QStringLiteral("young")), 1.0);
-    QCOMPARE(f.value(QStringLiteral("old")), 0.0);
-    QCOMPARE(f.value(QStringLiteral("averageweight")), 1.0);
-    QCOMPARE(f.value(QStringLiteral("maxheight")), 0.0);
-    QVERIFY(qFuzzyCompare(f.value(QStringLiteral("caucasian")), 1.0 / 3.0));
+    QCOMPARE(macros.factor(MacroValue::Female), 0.5);
+    QCOMPARE(macros.factor(MacroValue::Young), 1.0);
+    QCOMPARE(macros.factor(MacroValue::Old), 0.0);
+    QCOMPARE(macros.factor(MacroValue::AverageWeight), 1.0);
+    QCOMPARE(macros.factor(MacroValue::MaxHeight), 0.0);
+    QVERIFY(qFuzzyCompare(macros.factor(MacroValue::Caucasian), 1.0 / 3.0));
 
     macros.weight = 0.75;
     macros.height = 0.0;
     macros.age = 0.25;
-    f = macros.factors();
-    QCOMPARE(f.value(QStringLiteral("maxweight")), 0.5);
-    QCOMPARE(f.value(QStringLiteral("averageweight")), 0.5);
-    QCOMPARE(f.value(QStringLiteral("minheight")), 1.0);
-    QVERIFY(qAbs(f.value(QStringLiteral("young")) - 0.2) < 1e-9);
-    QVERIFY(qAbs(f.value(QStringLiteral("child")) - 0.8) < 1e-9);
+    QCOMPARE(macros.factor(MacroValue::MaxWeight), 0.5);
+    QCOMPARE(macros.factor(MacroValue::AverageWeight), 0.5);
+    QCOMPARE(macros.factor(MacroValue::MinHeight), 1.0);
+    QVERIFY(qAbs(macros.factor(MacroValue::Young) - 0.2) < 1e-9);
+    QVERIFY(qAbs(macros.factor(MacroValue::Child) - 0.8) < 1e-9);
+
+    // Age in years (human.py setAgeYears / getAgeYears).
+    QCOMPARE(MakeHumanMacros::ageFromYears(25), 0.5);
+    QCOMPARE(MakeHumanMacros::ageFromYears(1), 0.0);
+    QCOMPARE(MakeHumanMacros::ageFromYears(90), 1.0);
+    QVERIFY(qAbs(MakeHumanMacros::ageFromYears(10) - 0.1875) < 1e-9);
+    QVERIFY(qAbs(MakeHumanMacros::yearsFromAge(MakeHumanMacros::ageFromYears(47)) - 47) < 1e-9);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -903,60 +923,197 @@ void TST_Seamly3D::makeHumanModifiersChangeMeasures()
 //---------------------------------------------------------------------------------------------------------------------
 void TST_Seamly3D::makeHumanFit_data()
 {
-    QTest::addColumn<BodyMeasurements>("measurements");
+    // Measurements taken from MakeHuman bodies are consistent with what a body can be, so the fit must find them.
+    // The bodies differ in gender, age, build and proportions.
+    QTest::addColumn<double>("gender");
+    QTest::addColumn<double>("ageYears");
+    QTest::addColumn<double>("weight");
+    QTest::addColumn<double>("muscle");
+    QTest::addColumn<double>("height");
+    QTest::addColumn<QVector<double>>("modifiers");
 
-    QTest::newRow("default") << BodyMeasurements();
+    const QStringList names = MakeHumanData::modifierNames();
+    const auto modifiers = [&names](std::initializer_list<QPair<const char *, double>> values)
+    {
+        QVector<double> result(names.size(), 0.0);
+        for (const auto &value : values)
+        {
+            result[names.indexOf(QString::fromLatin1(value.first))] = value.second;
+        }
+        return result;
+    };
 
-    BodyMeasurements man;
-    man.setGender(1.0);
-    man.scaleToHeight(182);
-    man.setValue(BodyMeasurement::NeckCirc, 40);
-    man.setValue(BodyMeasurement::BustCirc, 102);
-    man.setValue(BodyMeasurement::UnderbustCirc, 92);
-    man.setValue(BodyMeasurement::WaistCirc, 88);
-    man.setValue(BodyMeasurement::HipCirc, 100);
-    man.setValue(BodyMeasurement::UpperArmCirc, 32);
-    man.setValue(BodyMeasurement::WristCirc, 17.5);
-    man.setValue(BodyMeasurement::ArmLength, 63);
-    QTest::newRow("man") << man;
-
-    BodyMeasurements petite;
-    petite.scaleToHeight(155);
-    petite.setValue(BodyMeasurement::BustCirc, 108);
-    petite.setValue(BodyMeasurement::UnderbustCirc, 90);
-    petite.setValue(BodyMeasurement::WaistCirc, 90);
-    petite.setValue(BodyMeasurement::HipCirc, 114);
-    petite.setValue(BodyMeasurement::ThighCirc, 64);
-    QTest::newRow("petite plus") << petite;
+    QTest::newRow("woman") << 0.0 << 25.0 << 0.5 << 0.5 << 0.5 << modifiers({});
+    QTest::newRow("curvy woman")
+        << 0.0 << 38.0 << 0.75 << 0.4 << 0.4
+        << modifiers({{"measure-hips-circ", 0.6}, {"measure-waist-circ", -0.3}, {"lowerlegs-height", -0.4},
+                      {"breast-trans", -0.3}});
+    QTest::newRow("tall man")
+        << 1.0 << 45.0 << 0.6 << 0.7 << 0.85
+        << modifiers({{"measure-shoulder-dist", 0.5}, {"upperlegs-height", 0.3}, {"measure-neck-circ", 0.4},
+                      {"shoulders-height", -0.4}});
+    QTest::newRow("child") << 0.5 << 8.0 << 0.5 << 0.5 << 0.5 << modifiers({{"head-scale", 0.3}});
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 void TST_Seamly3D::makeHumanFit()
 {
-    QFETCH(BodyMeasurements, measurements);
+    QFETCH(double, gender);
+    QFETCH(double, ageYears);
+    QFETCH(double, weight);
+    QFETCH(double, muscle);
+    QFETCH(double, height);
+    QFETCH(QVector<double>, modifiers);
 
+    const QSharedPointer<const MakeHumanData> data = MakeHumanData::instance();
+    MakeHumanMacros macros;
+    macros.gender = gender;
+    macros.age = MakeHumanMacros::ageFromYears(ageYears);
+    macros.weight = weight;
+    macros.muscle = muscle;
+    macros.height = height;
+    if (ageYears < 13)
+    {
+        macros.breastSize = 0.0; // the fitter gives children a flat chest
+    }
+
+    MakeHumanBody source(data);
+    source.setMacros(macros);
+    source.setModifierValues(modifiers);
+
+    MakeHumanTape tape(*data);
+    tape.lockLandmarks(source);
+    const QVector<double> taken = tape.measure(source, source.heightCm());
+
+    BodyMeasurements measurements;
+    for (int i = 0; i < BodyMeasurements::count(); ++i)
+    {
+        measurements.setValue(static_cast<BodyMeasurement>(i), taken.at(i));
+    }
+    measurements.setGender(gender);
+    measurements.setAge(ageYears);
+    measurements.setMuscle(muscle);
+
+    QElapsedTimer timer;
+    timer.start();
     const MakeHumanFit fit = MakeHumanFitter::fit(measurements);
+    qDebug("fit took %lld ms, largest difference %.3f cm", timer.elapsed(), fit.maxError());
+
     QVERIFY2(fit.valid, qPrintable(fit.errorString));
     QVERIFY(fit.mesh.isValid());
-
+    if (ageYears >= 13)
+    {
+        QVERIFY(fit.unfitted().isEmpty());
+    }
+    else
+    {
+        // A child has no bust: lowbust and bustpoint are left out of the fit.
+        QCOMPARE(fit.unfitted(),
+                 QVector<BodyMeasurement>({BodyMeasurement::BustpointHeight, BodyMeasurement::UnderbustCirc}));
+    }
+    // Girths count fully in the fit, landmark heights (and the head) half: they may trade a little for a natural body.
     for (const MakeHumanFit::Entry &entry : fit.entries)
     {
-        if (entry.fitted)
+        if (!entry.fitted)
         {
-            QVERIFY2(qAbs(entry.achieved - entry.target) < 0.1,
-                     qPrintable(QStringLiteral("%1: %2 instead of %3")
-                                    .arg(BodyMeasurements::name(entry.measurement))
-                                    .arg(entry.achieved)
-                                    .arg(entry.target)));
+            continue;
         }
+        const bool height = BodyMeasurements::group(entry.measurement) == BodyMeasurementGroup::Height
+                            || entry.measurement == BodyMeasurement::HeadCirc;
+        QVERIFY2(qAbs(entry.achieved - entry.target) < (height ? 0.3 : 0.15),
+                 qPrintable(QStringLiteral("%1: %2 instead of %3")
+                                .arg(BodyMeasurements::name(entry.measurement))
+                                .arg(entry.achieved)
+                                .arg(entry.target)));
     }
-    QVERIFY(fit.maxError() < 0.1);
+    QVERIFY(qAbs(static_cast<double>(fit.mesh.bounds().size().y()) - measurements.value(BodyMeasurement::Height))
+            < 0.05);
+}
 
-    // Height, bust, waist and hip are among the fitted measurements.
-    QVERIFY(!fit.unfitted().contains(BodyMeasurement::Height));
-    QVERIFY(!fit.unfitted().contains(BodyMeasurement::BustCirc));
-    QVERIFY(!fit.unfitted().contains(BodyMeasurement::WaistCirc));
-    QVERIFY(!fit.unfitted().contains(BodyMeasurement::HipCirc));
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::makeHumanFitDefaultMeasurements()
+{
+    // The default measurements are MakeHuman's average woman, rounded to 0.5 cm: they fit closely.
+    const MakeHumanFit fit = MakeHumanFitter::fit(BodyMeasurements());
+    QVERIFY(fit.valid);
+    QVERIFY2(fit.maxError() < 0.25, qPrintable(QString::number(fit.maxError())));
+    for (const double modifier : fit.modifiers)
+    {
+        QVERIFY(qAbs(modifier) < 0.5); // no reshaping needed
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::makeHumanTapeMeasuresEverything()
+{
+    const QSharedPointer<const MakeHumanData> data = MakeHumanData::instance();
+    MakeHumanBody body(data);
+    MakeHumanTape tape(*data);
+
+    QVERIFY(tape.shoulderPath().size() > 5); // over the back, not straight through the body
+    const QVector<double> values = tape.measure(body, 170.0);
+    QCOMPARE(values.size(), BodyMeasurements::count());
+    for (int i = 0; i < values.size(); ++i)
+    {
+        QVERIFY2(values.at(i) > 1.0, qPrintable(BodyMeasurements::name(static_cast<BodyMeasurement>(i))));
+    }
+    QCOMPARE(values.at(static_cast<int>(BodyMeasurement::Height)), 170.0);
+
+    // Heights go down from head to ankle, like on a person.
+    const BodyMeasurement order[] = {BodyMeasurement::Height,       BodyMeasurement::NeckBackHeight,
+                                     BodyMeasurement::ShoulderTipHeight, BodyMeasurement::ArmpitHeight,
+                                     BodyMeasurement::WaistHeight,  BodyMeasurement::HipHeight,
+                                     BodyMeasurement::CrotchHeight, BodyMeasurement::KneeHeight,
+                                     BodyMeasurement::CalfHeight,   BodyMeasurement::AnkleHeight};
+    for (size_t i = 1; i < sizeof(order) / sizeof(order[0]); ++i)
+    {
+        QVERIFY2(values.at(static_cast<int>(order[i])) < values.at(static_cast<int>(order[i - 1])),
+                 qPrintable(BodyMeasurements::name(order[i])));
+    }
+
+    // Measuring follows the body: a bigger head has a bigger head circumference.
+    body.setModifier(QStringLiteral("head-scale"), 1.0);
+    QVERIFY(tape.measure(body, 170.0).at(static_cast<int>(BodyMeasurement::HeadCirc))
+            > values.at(static_cast<int>(BodyMeasurement::HeadCirc)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::readVitBirthDate()
+{
+    const int year = QDate::currentDate().year() - 40;
+    QBuffer buffer;
+    buffer.setData(QStringLiteral("<smis><unit>cm</unit><personal><birth-date>%1-01-01</birth-date></personal>"
+                                  "<body-measurements/></smis>").arg(year).toUtf8());
+    buffer.open(QIODevice::ReadOnly);
+    BodyMeasurements measurements;
+    QVERIFY(measurements.readVit(&buffer));
+    QVERIFY(qAbs(measurements.age() - 40) < 1.1);
+
+    // SeamlyMe's "unknown" birth date keeps the default age.
+    QBuffer unknown;
+    unknown.setData("<smis><unit>cm</unit><personal><birth-date>1800-01-01</birth-date></personal>"
+                    "<body-measurements/></smis>");
+    unknown.open(QIODevice::ReadOnly);
+    BodyMeasurements defaults;
+    QVERIFY(defaults.readVit(&unknown));
+    QCOMPARE(defaults.age(), 25.0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::sliceByPlane()
+{
+    Mesh cube;
+    QVERIFY(readObj(unitCubeObj, cube));
+
+    // A vertical cut through the middle of the cube is a 1 x 1 square.
+    QVERIFY(qFuzzyCompare(MeshSlicer::longestClosedLength(
+                              MeshSlicer::sliceByPlane(cube, QVector3D(0.5f, 0.5f, 0.5f), QVector3D(1, 0, 0))),
+                          4.0));
+    // A diagonal cut through two opposite edges is a 1 x sqrt(2) rectangle.
+    QVERIFY(qAbs(MeshSlicer::longestClosedLength(
+                     MeshSlicer::sliceByPlane(cube, QVector3D(0.5f, 0.5f, 0.5f), QVector3D(1, -1, 0)))
+                 - (2 + 2 * std::sqrt(2.0)))
+            < 1e-5);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

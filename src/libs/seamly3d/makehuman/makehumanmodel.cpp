@@ -29,12 +29,10 @@
 
 #include "makehumanmodel.h"
 
-#include <QBuffer>
 #include <QDataStream>
 #include <QFile>
 #include <QMutex>
 #include <QMutexLocker>
-#include <QSet>
 #include <QtMath>
 
 #include <cstring>
@@ -54,29 +52,120 @@ namespace
 
 const QString resourcePath = QStringLiteral(":/seamly3d/makehuman/makehuman_body.smh");
 const char    packMagic[4] = {'S', 'M', 'H', 'B'};
-const quint32 packVersion = 1;
-const double  deltaScale = 1.0 / 4096.0;
-const QString measurePrefix = QStringLiteral("measure/");
+const quint32 packVersion = 2;
 
-// Macro values that appear in target names (lib/targets.py, _cat_data).
-const QSet<QString> &macroValues()
+// Names of the MacroValue ids as they appear in target names (lib/targets.py, _cat_data).
+const char *const macroValueNames[] = {
+    "male", "female",
+    "baby", "child", "young", "old",
+    "caucasian", "asian", "african",
+    "minmuscle", "averagemuscle", "maxmuscle",
+    "minweight", "averageweight", "maxweight",
+    "minheight", "averageheight", "maxheight",
+    "mincup", "averagecup", "maxcup",
+    "minfirmness", "averagefirmness", "maxfirmness",
+    "uncommonproportions", "regularproportions", "idealproportions"};
+
+static_assert(sizeof(macroValueNames) / sizeof(macroValueNames[0]) == static_cast<size_t>(MacroValue::Count),
+              "macroValueNames must name every MacroValue");
+
+const QHash<QString, int> &macroValueIds()
 {
-    static const QSet<QString> values = {
-        QStringLiteral("male"),           QStringLiteral("female"),
-        QStringLiteral("baby"),           QStringLiteral("child"),
-        QStringLiteral("young"),          QStringLiteral("old"),
-        QStringLiteral("caucasian"),      QStringLiteral("asian"),
-        QStringLiteral("african"),        QStringLiteral("maxmuscle"),
-        QStringLiteral("averagemuscle"),  QStringLiteral("minmuscle"),
-        QStringLiteral("minweight"),      QStringLiteral("averageweight"),
-        QStringLiteral("maxweight"),      QStringLiteral("minheight"),
-        QStringLiteral("averageheight"),  QStringLiteral("maxheight"),
-        QStringLiteral("mincup"),         QStringLiteral("averagecup"),
-        QStringLiteral("maxcup"),         QStringLiteral("minfirmness"),
-        QStringLiteral("averagefirmness"), QStringLiteral("maxfirmness"),
-        QStringLiteral("uncommonproportions"), QStringLiteral("regularproportions"),
-        QStringLiteral("idealproportions")};
-    return values;
+    static const QHash<QString, int> ids = []()
+    {
+        QHash<QString, int> result;
+        for (int i = 0; i < static_cast<int>(MacroValue::Count); ++i)
+        {
+            result.insert(QString::fromLatin1(macroValueNames[i]), i);
+        }
+        return result;
+    }();
+    return ids;
+}
+
+QVector<int> factorIds(const QString &name)
+{
+    QVector<int> ids;
+    for (const QString &token : name.section(QLatin1Char('/'), -1).split(QLatin1Char('-'), Qt::SkipEmptyParts))
+    {
+        const int id = macroValueIds().value(token, -1);
+        if (id >= 0)
+        {
+            ids.append(id);
+        }
+    }
+    return ids;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief A modifier and the targets it moves: decrease targets for negative values, increase for positive ones. */
+struct ModifierSpec
+{
+    QString     name;
+    QStringList decrease;
+    QStringList increase;
+};
+
+const QVector<ModifierSpec> &modifierSpecs()
+{
+    static const QVector<ModifierSpec> specs = []()
+    {
+        QVector<ModifierSpec> result;
+
+        // measurement_modifiers.json: every ruler has a matching measure-*-decr|incr modifier.
+        const QStringList measures = {
+            QStringLiteral("neck-circ"),       QStringLiteral("neck-height"),       QStringLiteral("upperarm-circ"),
+            QStringLiteral("upperarm-length"), QStringLiteral("lowerarm-length"),   QStringLiteral("wrist-circ"),
+            QStringLiteral("bust-circ"),       QStringLiteral("underbust-circ"),
+            QStringLiteral("waist-circ"),      QStringLiteral("napetowaist-dist"),  QStringLiteral("waisttohip-dist"),
+            QStringLiteral("shoulder-dist"),   QStringLiteral("hips-circ"),         QStringLiteral("upperleg-height"),
+            QStringLiteral("thigh-circ"),      QStringLiteral("lowerleg-height"),   QStringLiteral("calf-circ"),
+            QStringLiteral("knee-circ"),       QStringLiteral("ankle-circ")};
+        for (const QString &measure : measures)
+        {
+            const QString base = QStringLiteral("measure/measure-") + measure;
+            result.append({QStringLiteral("measure-") + measure, {base + QStringLiteral("-decr")},
+                           {base + QStringLiteral("-incr")}});
+        }
+
+        // Modeling targets for lengths and landmark heights. Left and right move together.
+        const auto pair = [](const QString &name, const QString &target, const QString &minSuffix,
+                             const QString &maxSuffix)
+        { return ModifierSpec{name, {target + minSuffix}, {target + maxSuffix}}; };
+        const QString decr = QStringLiteral("-decr");
+        const QString incr = QStringLiteral("-incr");
+
+        result.append(pair(QStringLiteral("lowerlegs-height"), QStringLiteral("armslegs/lowerlegs-height"), decr, incr));
+        result.append(pair(QStringLiteral("upperlegs-height"), QStringLiteral("armslegs/upperlegs-height"), decr, incr));
+        result.append({QStringLiteral("feet-scale-vert"),
+                       {QStringLiteral("armslegs/l-foot-scale-vert-decr"), QStringLiteral("armslegs/r-foot-scale-vert-decr")},
+                       {QStringLiteral("armslegs/l-foot-scale-vert-incr"), QStringLiteral("armslegs/r-foot-scale-vert-incr")}});
+        result.append({QStringLiteral("lowerlegs-scale-vert"),
+                       {QStringLiteral("armslegs/l-lowerleg-scale-vert-decr"),
+                        QStringLiteral("armslegs/r-lowerleg-scale-vert-decr")},
+                       {QStringLiteral("armslegs/l-lowerleg-scale-vert-incr"),
+                        QStringLiteral("armslegs/r-lowerleg-scale-vert-incr")}});
+        result.append(pair(QStringLiteral("hip-scale-vert"), QStringLiteral("hip/hip-scale-vert"), decr, incr));
+        result.append(pair(QStringLiteral("hip-waist"), QStringLiteral("hip/hip-waist"), QStringLiteral("-down"),
+                           QStringLiteral("-up")));
+        result.append(pair(QStringLiteral("torso-scale-vert"), QStringLiteral("torso/torso-scale-vert"), decr, incr));
+        result.append(pair(QStringLiteral("breast-trans"), QStringLiteral("breast/breast-trans"), QStringLiteral("-down"),
+                           QStringLiteral("-up")));
+        result.append(pair(QStringLiteral("neck-scale-vert"), QStringLiteral("neck/neck-scale-vert"), decr, incr));
+        result.append({QStringLiteral("head-scale"),
+                       {QStringLiteral("head/head-scale-horiz-decr"), QStringLiteral("head/head-scale-depth-decr")},
+                       {QStringLiteral("head/head-scale-horiz-incr"), QStringLiteral("head/head-scale-depth-incr")}});
+        result.append({QStringLiteral("upperarms-fat"),
+                       {QStringLiteral("armslegs/l-upperarm-fat-decr"), QStringLiteral("armslegs/r-upperarm-fat-decr")},
+                       {QStringLiteral("armslegs/l-upperarm-fat-incr"), QStringLiteral("armslegs/r-upperarm-fat-incr")}});
+        result.append({QStringLiteral("lowerarms-fat"),
+                       {QStringLiteral("armslegs/l-lowerarm-fat-decr"), QStringLiteral("armslegs/r-lowerarm-fat-decr")},
+                       {QStringLiteral("armslegs/l-lowerarm-fat-incr"), QStringLiteral("armslegs/r-lowerarm-fat-incr")}});
+        result.append(pair(QStringLiteral("shoulders-height"), QStringLiteral("seamly/shoulders"), QStringLiteral("-down"),
+                           QStringLiteral("-up")));
+        return result;
+    }();
+    return specs;
 }
 
 // Tape measure paths over the base mesh vertices (plugins/0_modeling_a_measurement.py, class Ruler).
@@ -97,7 +186,6 @@ const QHash<QString, QVector<int>> &rulers()
         {QStringLiteral("measure-wrist-circ"),
          {10208, 10211, 10212, 10216, 10471, 10533, 10213, 10214, 10215, 10205,
           10204, 10203, 10437, 10202, 10201, 10206, 10200, 10210, 10209, 10208}},
-        {QStringLiteral("measure-frontchest-dist"), {1437, 8125}},
         {QStringLiteral("measure-bust-circ"),
          {8439, 8455, 8462, 8446, 8478, 8494, 8557, 8510, 8526, 8542, 10720, 10601, 10603, 10602, 10612,
           10611, 10610, 10613, 10604, 10605, 10606, 3942, 3941, 3940, 3950, 3947, 3948, 3949, 3938, 3939,
@@ -141,37 +229,30 @@ const QHash<QString, QVector<int>> &rulers()
  * @brief Weights of a three valued macro (min, average, max) for a value in [0, 1] (human.py _set*Vals).
  * human.py writes the average as 1 - (max + min) or 1 - max(max, min); both agree because max or min is always 0.
  */
-void threeWay(QHash<QString, double> &factors, double value, const QString &minName, const QString &averageName,
-              const QString &maxName)
+void threeWay(MacroFactors &factors, double value, MacroValue minValue, MacroValue averageValue, MacroValue maxValue)
 {
     const double maxVal = qMax(0.0, value * 2 - 1);
     const double minVal = qMax(0.0, 1 - value * 2);
-    factors.insert(maxName, maxVal);
-    factors.insert(minName, minVal);
-    factors.insert(averageName, 1 - (maxVal > minVal ? maxVal : minVal));
+    factors[static_cast<size_t>(maxValue)] = maxVal;
+    factors[static_cast<size_t>(minValue)] = minVal;
+    factors[static_cast<size_t>(averageValue)] = 1 - (maxVal > minVal ? maxVal : minVal);
 }
 
-//---------------------------------------------------------------------------------------------------------------------
-QVector<QVector3D> denseDeltas(const MakeHumanTarget &target, int vertexCount)
-{
-    QVector<QVector3D> dense(vertexCount);
-    for (int i = 0; i < target.indices.size(); ++i)
-    {
-        dense[target.indices.at(i)] = target.deltas.at(i);
-    }
-    return dense;
-}
+const double minAge = 1.0;  // human.py MIN_AGE
+const double midAge = 25.0; // human.py MID_AGE
+const double maxAge = 90.0; // human.py MAX_AGE
 
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
-QHash<QString, double> MakeHumanMacros::factors() const
+MacroFactors MakeHumanMacros::factors() const
 {
-    QHash<QString, double> f;
+    MacroFactors f{};
+    const auto set = [&f](MacroValue value, double weight) { f[static_cast<size_t>(value)] = weight; };
 
     const double g = qBound(0.0, gender, 1.0);
-    f.insert(QStringLiteral("male"), g);
-    f.insert(QStringLiteral("female"), 1 - g);
+    set(MacroValue::Male, g);
+    set(MacroValue::Female, 1 - g);
 
     // 1y baby, 10y child, 25y young, 90y old: age 0, 0.1875, 0.5, 1.
     const double a = qBound(0.0, age, 1.0);
@@ -187,21 +268,19 @@ QHash<QString, double> MakeHumanMacros::factors() const
         old = qMax(0.0, a * 2 - 1);
         young = 1 - old;
     }
-    f.insert(QStringLiteral("baby"), baby);
-    f.insert(QStringLiteral("child"), child);
-    f.insert(QStringLiteral("young"), young);
-    f.insert(QStringLiteral("old"), old);
+    set(MacroValue::Baby, baby);
+    set(MacroValue::Child, child);
+    set(MacroValue::Young, young);
+    set(MacroValue::Old, old);
 
-    threeWay(f, qBound(0.0, muscle, 1.0), QStringLiteral("minmuscle"), QStringLiteral("averagemuscle"),
-             QStringLiteral("maxmuscle"));
-    threeWay(f, qBound(0.0, weight, 1.0), QStringLiteral("minweight"), QStringLiteral("averageweight"),
-             QStringLiteral("maxweight"));
-    threeWay(f, qBound(0.0, height, 1.0), QStringLiteral("minheight"), QStringLiteral("averageheight"),
-             QStringLiteral("maxheight"));
-    threeWay(f, qBound(0.0, breastSize, 1.0), QStringLiteral("mincup"), QStringLiteral("averagecup"),
-             QStringLiteral("maxcup"));
-    threeWay(f, qBound(0.0, breastFirmness, 1.0), QStringLiteral("minfirmness"), QStringLiteral("averagefirmness"),
-             QStringLiteral("maxfirmness"));
+    threeWay(f, qBound(0.0, muscle, 1.0), MacroValue::MinMuscle, MacroValue::AverageMuscle, MacroValue::MaxMuscle);
+    threeWay(f, qBound(0.0, weight, 1.0), MacroValue::MinWeight, MacroValue::AverageWeight, MacroValue::MaxWeight);
+    threeWay(f, qBound(0.0, height, 1.0), MacroValue::MinHeight, MacroValue::AverageHeight, MacroValue::MaxHeight);
+    threeWay(f, qBound(0.0, breastSize, 1.0), MacroValue::MinCup, MacroValue::AverageCup, MacroValue::MaxCup);
+    threeWay(f, qBound(0.0, breastFirmness, 1.0), MacroValue::MinFirmness, MacroValue::AverageFirmness,
+             MacroValue::MaxFirmness);
+    // Proportion targets are not bundled; regular proportions (the default) apply none.
+    set(MacroValue::RegularProportions, 1.0);
 
     // Ethnic values always sum to 1 (human.py _setEthnicVals).
     double races[3] = {qMax(0.0, african), qMax(0.0, asian), qMax(0.0, caucasian)};
@@ -210,26 +289,60 @@ QHash<QString, double> MakeHumanMacros::factors() const
     {
         race = total > 0 ? race / total : 1.0 / 3.0;
     }
-    f.insert(QStringLiteral("african"), races[0]);
-    f.insert(QStringLiteral("asian"), races[1]);
-    f.insert(QStringLiteral("caucasian"), races[2]);
-
+    set(MacroValue::African, races[0]);
+    set(MacroValue::Asian, races[1]);
+    set(MacroValue::Caucasian, races[2]);
     return f;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double MakeHumanMacros::factor(MacroValue value) const
+{
+    return factors().at(static_cast<size_t>(value));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double MakeHumanMacros::ageFromYears(double years)
+{
+    years = qBound(minAge, years, maxAge);
+    if (years < midAge)
+    {
+        return (years - minAge) / ((midAge - minAge) * 2);
+    }
+    return (years - midAge) / ((maxAge - midAge) * 2) + 0.5;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double MakeHumanMacros::yearsFromAge(double age)
+{
+    age = qBound(0.0, age, 1.0);
+    if (age < 0.5)
+    {
+        return minAge + ((midAge - minAge) * 2) * age;
+    }
+    return midAge + ((maxAge - midAge) * 2) * (age - 0.5);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 QStringList MakeHumanData::targetFactors(const QString &name)
 {
-    const QString base = name.section(QLatin1Char('/'), -1);
     QStringList result;
-    for (const QString &token : base.split(QLatin1Char('-'), Qt::SkipEmptyParts))
+    for (const int id : factorIds(name))
     {
-        if (macroValues().contains(token))
-        {
-            result.append(token);
-        }
+        result.append(QString::fromLatin1(macroValueNames[id]));
     }
     return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QStringList MakeHumanData::modifierNames()
+{
+    QStringList names;
+    for (const ModifierSpec &spec : modifierSpecs())
+    {
+        names.append(spec.name);
+    }
+    return names;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -239,13 +352,24 @@ bool MakeHumanData::load(QIODevice *device)
     basePositions.clear();
     triangles.clear();
     targets.clear();
+    modifiers.clear();
     m_index.clear();
+
+    const auto fail = [this](const QString &error)
+    {
+        m_errorString = error;
+        basePositions.clear();
+        triangles.clear();
+        targets.clear();
+        modifiers.clear();
+        m_index.clear();
+        return false;
+    };
 
     const QByteArray data = qUncompress(device->readAll());
     if (data.isEmpty())
     {
-        m_errorString = tr("The MakeHuman body data is damaged.");
-        return false;
+        return fail(tr("The MakeHuman body data is damaged."));
     }
 
     QDataStream in(data);
@@ -253,26 +377,26 @@ bool MakeHumanData::load(QIODevice *device)
     in.setFloatingPointPrecision(QDataStream::SinglePrecision);
 
     char magic[4];
-    quint32 version = 0;
     if (in.readRawData(magic, 4) != 4 || memcmp(magic, packMagic, 4) != 0)
     {
-        m_errorString = tr("Not a MakeHuman body data pack.");
-        return false;
+        return fail(tr("Not a MakeHuman body data pack."));
     }
+
+    quint32 version = 0;
     in >> version;
     if (version != packVersion)
     {
-        m_errorString = tr("Unsupported MakeHuman body data version %1.").arg(version);
-        return false;
+        return fail(tr("Unsupported MakeHuman body data version %1.").arg(version));
     }
 
+    float deltaScale = 0;
     quint32 vertexCount = 0;
-    in >> vertexCount;
-    if (vertexCount == 0 || vertexCount > std::numeric_limits<quint16>::max())
+    in >> deltaScale >> vertexCount;
+    if (!(deltaScale > 0) || vertexCount == 0 || vertexCount > std::numeric_limits<quint16>::max())
     {
-        m_errorString = tr("The MakeHuman body data is damaged.");
-        return false;
+        return fail(tr("The MakeHuman body data is damaged."));
     }
+
     basePositions.resize(static_cast<int>(vertexCount));
     for (QVector3D &position : basePositions)
     {
@@ -288,6 +412,13 @@ bool MakeHumanData::load(QIODevice *device)
     {
         quint16 q[4];
         in >> q[0] >> q[1] >> q[2] >> q[3];
+        for (const quint16 index : q)
+        {
+            if (index >= vertexCount)
+            {
+                return fail(tr("The MakeHuman body data is damaged."));
+            }
+        }
         triangles << q[0] << q[1] << q[2] << q[0] << q[2] << q[3];
     }
 
@@ -302,55 +433,92 @@ bool MakeHumanData::load(QIODevice *device)
         QByteArray name(nameLength, Qt::Uninitialized);
         in.readRawData(name.data(), nameLength);
         target.name = QString::fromUtf8(name);
-        target.factors = targetFactors(target.name);
+        target.factors = factorIds(target.name);
 
         quint32 entries = 0;
         in >> entries;
         if (entries > vertexCount)
         {
-            m_errorString = tr("The MakeHuman body data is damaged.");
-            return false;
+            return fail(tr("The MakeHuman body data is damaged."));
         }
+
+        // Indices are stored as gaps from the previous index; deltas as separate x, y and z planes.
         target.indices.resize(static_cast<int>(entries));
-        for (quint16 &index : target.indices)
+        quint32 index = 0;
+        for (quint16 &stored : target.indices)
         {
-            in >> index;
+            quint16 gap = 0;
+            in >> gap;
+            index += gap;
+            if (index >= vertexCount)
+            {
+                return fail(tr("The MakeHuman body data is damaged."));
+            }
+            stored = static_cast<quint16>(index);
         }
+
         target.deltas.resize(static_cast<int>(entries));
-        for (QVector3D &delta : target.deltas)
+        const float factor = 1.0f / deltaScale;
+        for (int axis = 0; axis < 3; ++axis)
         {
-            qint16 d[3];
-            in >> d[0] >> d[1] >> d[2];
-            delta = QVector3D(static_cast<float>(d[0] * deltaScale), static_cast<float>(d[1] * deltaScale),
-                              static_cast<float>(d[2] * deltaScale));
+            for (QVector3D &delta : target.deltas)
+            {
+                qint16 value = 0;
+                in >> value;
+                delta[axis] = static_cast<float>(value) * factor;
+            }
         }
 
         m_index.insert(target.name, static_cast<int>(targets.size()));
         targets.append(target);
     }
 
-    const auto maxIndex = static_cast<quint32>(vertexCount);
-    bool indicesValid = true;
-    for (const quint32 index : qAsConst(triangles))
+    if (in.status() != QDataStream::Ok || triangles.isEmpty())
     {
-        indicesValid = indicesValid && index < maxIndex;
-    }
-    for (const MakeHumanTarget &target : qAsConst(targets))
-    {
-        for (const quint16 index : target.indices)
-        {
-            indicesValid = indicesValid && index < maxIndex;
-        }
+        return fail(tr("The MakeHuman body data is damaged."));
     }
 
-    if (in.status() != QDataStream::Ok || !indicesValid || triangles.isEmpty())
+    if (!buildModifiers())
     {
-        m_errorString = tr("The MakeHuman body data is damaged.");
-        basePositions.clear();
-        triangles.clear();
-        targets.clear();
-        m_index.clear();
-        return false;
+        return fail(m_errorString);
+    }
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool MakeHumanData::buildModifiers()
+{
+    const int vertexCount = static_cast<int>(basePositions.size());
+
+    const auto dense = [this, vertexCount](const QStringList &names, QVector<QVector3D> &deltas)
+    {
+        deltas = QVector<QVector3D>(vertexCount);
+        for (const QString &name : names)
+        {
+            const int index = indexOf(name);
+            if (index < 0)
+            {
+                m_errorString = tr("The MakeHuman body data has no target %1.").arg(name);
+                return false;
+            }
+            const MakeHumanTarget &target = targets.at(index);
+            for (int i = 0; i < target.indices.size(); ++i)
+            {
+                deltas[target.indices.at(i)] += target.deltas.at(i);
+            }
+        }
+        return true;
+    };
+
+    for (const ModifierSpec &spec : modifierSpecs())
+    {
+        MakeHumanModifier modifier;
+        modifier.name = spec.name;
+        if (!dense(spec.decrease, modifier.decrease) || !dense(spec.increase, modifier.increase))
+        {
+            return false;
+        }
+        modifiers.append(modifier);
     }
     return true;
 }
@@ -407,25 +575,9 @@ QString MakeHumanData::errorString() const
 //---------------------------------------------------------------------------------------------------------------------
 MakeHumanBody::MakeHumanBody(const QSharedPointer<const MakeHumanData> &data)
     : m_data(data)
+    , m_values(data->modifiers.size(), 0.0)
 {
     Q_ASSERT(m_data);
-
-    const int vertexCount = static_cast<int>(m_data->basePositions.size());
-    for (const QString &name : modifierNames())
-    {
-        const int decrease = m_data->indexOf(measurePrefix + name + QStringLiteral("-decr"));
-        const int increase = m_data->indexOf(measurePrefix + name + QStringLiteral("-incr"));
-        if (decrease < 0 || increase < 0)
-        {
-            continue;
-        }
-
-        Modifier modifier;
-        modifier.decrease = denseDeltas(m_data->targets.at(decrease), vertexCount);
-        modifier.increase = denseDeltas(m_data->targets.at(increase), vertexCount);
-        m_modifiers.insert(name, modifier);
-    }
-
     setMacros(MakeHumanMacros());
 }
 
@@ -435,19 +587,19 @@ void MakeHumanBody::setMacros(const MakeHumanMacros &macros)
     m_macros = macros;
     m_macroPositions = m_data->basePositions;
 
-    const QHash<QString, double> factors = macros.factors();
+    const MacroFactors factors = macros.factors();
     for (const MakeHumanTarget &target : m_data->targets)
     {
-        if (target.name.startsWith(measurePrefix) || target.factors.isEmpty())
+        if (target.factors.isEmpty())
         {
-            continue;
+            continue; // modifier target
         }
 
         // The weight of a macro target is the product of the macro values it is made for (getTargetWeights).
         double weight = 1;
-        for (const QString &factor : target.factors)
+        for (const int factor : target.factors)
         {
-            weight *= factors.value(factor, 0.0);
+            weight *= factors.at(static_cast<size_t>(factor));
         }
         if (weight < 1e-6)
         {
@@ -471,49 +623,65 @@ MakeHumanMacros MakeHumanBody::macros() const
 //---------------------------------------------------------------------------------------------------------------------
 void MakeHumanBody::setModifier(const QString &name, double value)
 {
-    auto it = m_modifiers.find(name);
-    if (it != m_modifiers.end())
+    const int index = static_cast<int>(MakeHumanData::modifierNames().indexOf(name));
+    if (index >= 0 && index < m_values.size())
     {
-        it->value = qBound(-modifierLimit, value, modifierLimit);
+        QVector<double> values = m_values;
+        values[index] = value;
+        setModifierValues(values);
     }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 double MakeHumanBody::modifier(const QString &name) const
 {
-    return m_modifiers.value(name).value;
+    const int index = static_cast<int>(MakeHumanData::modifierNames().indexOf(name));
+    return index >= 0 && index < m_values.size() ? m_values.at(index) : 0.0;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-QStringList MakeHumanBody::modifierNames()
+void MakeHumanBody::setModifierValues(const QVector<double> &values)
 {
-    // measurement_modifiers.json: every ruler has a matching decr|incr modifier.
+    m_active.clear();
+    for (int i = 0; i < m_values.size(); ++i)
+    {
+        m_values[i] = i < values.size() ? qBound(-modifierLimit, values.at(i), modifierLimit) : 0.0;
+        if (!qFuzzyIsNull(m_values.at(i)))
+        {
+            m_active.append(i);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<double> MakeHumanBody::modifierValues() const
+{
+    return m_values;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QStringList MakeHumanBody::rulerNames()
+{
     QStringList names = rulers().keys();
     names.sort();
     return names;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-QStringList MakeHumanBody::rulerNames()
+QVector<int> MakeHumanBody::ruler(const QString &name)
 {
-    return modifierNames();
+    return rulers().value(name);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 QVector3D MakeHumanBody::position(int vertex) const
 {
     QVector3D p = m_macroPositions.at(vertex);
-    for (auto it = m_modifiers.constBegin(); it != m_modifiers.constEnd(); ++it)
+    for (const int index : m_active)
     {
-        const double value = it->value;
-        if (value < 0)
-        {
-            p += it->decrease.at(vertex) * static_cast<float>(-value);
-        }
-        else if (value > 0)
-        {
-            p += it->increase.at(vertex) * static_cast<float>(value);
-        }
+        const double value = m_values.at(index);
+        const MakeHumanModifier &modifier = m_data->modifiers.at(index);
+        p += (value < 0 ? modifier.decrease : modifier.increase).at(vertex) * static_cast<float>(qAbs(value));
     }
     return p;
 }
@@ -534,14 +702,11 @@ double MakeHumanBody::measure(const QString &ruler) const
 QVector<QVector3D> MakeHumanBody::positions() const
 {
     QVector<QVector3D> result = m_macroPositions;
-    for (auto it = m_modifiers.constBegin(); it != m_modifiers.constEnd(); ++it)
+    for (const int index : m_active)
     {
-        const double value = it->value;
-        if (qFuzzyIsNull(value))
-        {
-            continue;
-        }
-        const QVector<QVector3D> &deltas = value < 0 ? it->decrease : it->increase;
+        const double value = m_values.at(index);
+        const MakeHumanModifier &modifier = m_data->modifiers.at(index);
+        const QVector<QVector3D> &deltas = value < 0 ? modifier.decrease : modifier.increase;
         const auto weight = static_cast<float>(qAbs(value));
         for (int i = 0; i < result.size(); ++i)
         {
@@ -582,6 +747,12 @@ Mesh MakeHumanBody::mesh(double scale) const
     mesh.indices = m_data->triangles;
     mesh.computeNormals();
     return mesh;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+const MakeHumanData &MakeHumanBody::data() const
+{
+    return *m_data;
 }
 
 } // namespace Seamly3D
