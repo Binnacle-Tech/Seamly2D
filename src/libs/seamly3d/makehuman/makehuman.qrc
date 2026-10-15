@@ -1,0 +1,6 @@
+<RCC>
+    <!-- MakeHuman base body and targets, CC0 1.0. Built by tools/build_makehuman_pack.py. -->
+    <qresource prefix="/seamly3d/makehuman">
+        <file alias="makehuman_body.smh">share/makehuman_body.smh</file>
+    </qresource>
+</RCC>

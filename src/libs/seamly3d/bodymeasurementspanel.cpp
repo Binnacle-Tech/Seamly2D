@@ -39,6 +39,7 @@
 #include <QPushButton>
 #include <QScrollArea>
 #include <QSignalBlocker>
+#include <QSlider>
 #include <QVBoxLayout>
 
 namespace Seamly3D
@@ -48,6 +49,8 @@ namespace Seamly3D
 BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     : QWidget(parent)
     , m_unitComboBox(new QComboBox(this))
+    , m_genderComboBox(new QComboBox(this))
+    , m_muscleSlider(new QSlider(Qt::Horizontal, this))
     , m_proportionalCheckBox(new QCheckBox(tr("Scale lengths with height"), this))
     , m_sourceLabel(new QLabel(this))
 {
@@ -83,6 +86,21 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     auto *content = new QWidget;
     auto *contentLayout = new QVBoxLayout(content);
     contentLayout->setContentsMargins(0, 0, 0, 0);
+
+    // Build: what a tape measure can not tell.
+    auto *buildBox = new QGroupBox(tr("Body"), content);
+    auto *buildForm = new QFormLayout(buildBox);
+    m_genderComboBox->setParent(buildBox);
+    m_genderComboBox->addItem(tr("Female"), 0.0);
+    m_genderComboBox->addItem(tr("Male"), 1.0);
+    connect(m_genderComboBox, &QComboBox::currentIndexChanged, this, &BodyMeasurementsPanel::buildEdited);
+    buildForm->addRow(tr("Body shape:"), m_genderComboBox);
+    m_muscleSlider->setParent(buildBox);
+    m_muscleSlider->setRange(0, 100);
+    m_muscleSlider->setToolTip(tr("From soft to muscular"));
+    connect(m_muscleSlider, &QSlider::valueChanged, this, &BodyMeasurementsPanel::buildEdited);
+    buildForm->addRow(tr("Muscle tone:"), m_muscleSlider);
+    contentLayout->addWidget(buildBox);
 
     const QList<QPair<BodyMeasurementGroup, QString>> groups = {
         {BodyMeasurementGroup::Height, tr("Heights")},
@@ -200,6 +218,19 @@ void BodyMeasurementsPanel::valueEdited(int index)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void BodyMeasurementsPanel::buildEdited()
+{
+    if (m_updating)
+    {
+        return;
+    }
+
+    m_measurements.setGender(m_genderComboBox->currentData().toDouble());
+    m_measurements.setMuscle(m_muscleSlider->value() / 100.0);
+    emit measurementsChanged(m_measurements);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void BodyMeasurementsPanel::unitChanged()
 {
     updateSpinBoxes();
@@ -215,6 +246,13 @@ double BodyMeasurementsPanel::unitFactor() const
 void BodyMeasurementsPanel::updateSpinBoxes()
 {
     m_updating = true;
+    {
+        const QSignalBlocker genderBlocker(m_genderComboBox);
+        const QSignalBlocker muscleBlocker(m_muscleSlider);
+        m_genderComboBox->setCurrentIndex(m_measurements.gender() < 0.5 ? 0 : 1);
+        m_muscleSlider->setValue(qRound(m_measurements.muscle() * 100));
+    }
+
     const double factor = unitFactor();
     const QString suffix = factor == 1.0 ? tr(" cm") : tr(" in");
     for (int i = 0; i < m_spinBoxes.size(); ++i)

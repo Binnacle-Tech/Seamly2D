@@ -36,6 +36,7 @@ class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
+class QSlider;
 
 namespace Seamly3D
 {
@@ -65,6 +66,7 @@ public slots:
 
 private slots:
     void valueEdited(int index);
+    void buildEdited();
     void unitChanged();
 
 private:
@@ -76,6 +78,8 @@ private:
     BodyMeasurements         m_measurements{};
     QVector<QDoubleSpinBox *> m_spinBoxes{};
     QComboBox               *m_unitComboBox;
+    QComboBox               *m_genderComboBox;
+    QSlider                 *m_muscleSlider;
     QCheckBox               *m_proportionalCheckBox;
     QLabel                  *m_sourceLabel;
     QString                  m_lastDirectory{};

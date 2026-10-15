@@ -30,9 +30,11 @@
 #include <QMainWindow>
 #include <QString>
 
+#include "makehuman/makehumanfitter.h"
 #include "parametricbody.h"
 
 class QAction;
+class QComboBox;
 class QLabel;
 class QTimer;
 
@@ -45,7 +47,8 @@ class Viewport3D;
 /**
  * @brief Top level window of the 3D workspace.
  *
- * Shows a body (avatar) built from the user's measurements, or an imported body model, in a 3D viewport. It is
+ * Shows a body (avatar) fitted to the user's measurements, or an imported body model, in a 3D viewport. The fitted
+ * body is the realistic MakeHuman body when its data is available, or the simple mannequin. It is
  * independent of the 2D main window so the 3D workspace can grow (garments, sewing, simulation) without touching the
  * 2D code.
  */
@@ -75,17 +78,23 @@ private:
     Q_DISABLE_COPY_MOVE(Workspace3DWindow)
 
     enum class BodySource : char { Parametric, Imported };
+    enum class BodyKind : char { Realistic, Mannequin };
 
     void        createActions();
     void        updateStatus();
+    void        buildBody(bool frame);
+    BodyKind    bodyKind() const;
 
     Viewport3D            *m_viewport;
     BodyMeasurementsPanel *m_measurementsPanel;
     QLabel                *m_statusLabel;
     QTimer                *m_regenerateTimer;
+    QComboBox             *m_bodyKindComboBox;
 
     BodySource  m_source{BodySource::Parametric};
-    BodyModel   m_body{};
+    BodyModel   m_body{};          ///< Simple mannequin
+    MakeHumanFit m_fit{};          ///< Realistic body
+    QString     m_realisticError{};
     QString     m_bodyModelPath{};
     QString     m_lastDirectory{};
 };

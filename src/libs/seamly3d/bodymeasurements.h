@@ -91,6 +91,12 @@ public:
     double  value(BodyMeasurement measurement) const;
     void    setValue(BodyMeasurement measurement, double centimeters);
 
+    /** @brief Body build that measurements do not capture: gender 0 (female) to 1 (male), muscle 0 to 1. */
+    double  gender() const;
+    void    setGender(double gender);
+    double  muscle() const;
+    void    setMuscle(double muscle);
+
     /** @brief scaleToHeight changes the height and scales every vertical measurement by the same factor. */
     void    scaleToHeight(double height);
 
@@ -106,7 +112,7 @@ public:
     /**
      * @brief readVit reads a SeamlyMe individual measurements file (.vit). Measurements the body does not use, or
      * whose value is a formula instead of a number, are ignored. Missing height measurements are derived from the
-     * file's height.
+     * file's height. The gender is taken from the personal information when it is male or female.
      * @param applied receives the Seamly names of the measurements taken from the file.
      */
     bool    readVit(QIODevice *device, QStringList *applied = nullptr);
@@ -122,6 +128,8 @@ public:
 
 private:
     QVector<double> m_values;
+    double          m_gender{0.0};
+    double          m_muscle{0.5};
     QString         m_errorString{};
 };
 

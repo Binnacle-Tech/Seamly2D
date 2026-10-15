@@ -27,6 +27,7 @@
 #include "workspace3dwindow.h"
 
 #include <QAction>
+#include <QComboBox>
 #include <QDockWidget>
 #include <QFileDialog>
 #include <QFileInfo>
@@ -56,6 +57,7 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     , m_measurementsPanel(new BodyMeasurementsPanel(this))
     , m_statusLabel(new QLabel(this))
     , m_regenerateTimer(new QTimer(this))
+    , m_bodyKindComboBox(new QComboBox(this))
 {
     setObjectName(QStringLiteral("Seamly3DWorkspaceWindow"));
     setWindowTitle(tr("3D Workspace"));
@@ -78,12 +80,21 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
                 m_regenerateTimer->start();
             });
 
+    m_bodyKindComboBox->addItem(tr("Realistic (MakeHuman)"));
+    m_bodyKindComboBox->addItem(tr("Simple mannequin"));
+    m_bodyKindComboBox->setToolTip(tr("Body model fitted to the measurements"));
+    if (MakeHumanData::instance(&m_realisticError).isNull())
+    {
+        m_bodyKindComboBox->setCurrentIndex(1);
+        m_bodyKindComboBox->setEnabled(false);
+        m_bodyKindComboBox->setToolTip(m_realisticError);
+    }
+    connect(m_bodyKindComboBox, &QComboBox::currentIndexChanged, this, [this]() { buildBody(false); });
+
     createActions();
     resize(1200, 800);
 
-    m_body = ParametricBody::generate(m_measurementsPanel->measurements());
-    m_viewport->setMesh(m_body.combined());
-    updateStatus();
+    buildBody(true);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -168,23 +179,46 @@ void Workspace3DWindow::exportBodyModel()
 //---------------------------------------------------------------------------------------------------------------------
 void Workspace3DWindow::useParametricBody()
 {
-    const bool frame = m_source != BodySource::Parametric;
-    m_source = BodySource::Parametric;
-    m_bodyModelPath.clear();
-    m_body = ParametricBody::generate(m_measurementsPanel->measurements());
-    m_viewport->setMesh(m_body.combined(), frame);
-    updateStatus();
+    buildBody(m_source != BodySource::Parametric);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 void Workspace3DWindow::regenerateBody()
 {
     // Keep the camera where the user put it while they tweak measurements.
-    const bool frame = !m_bodyModelPath.isEmpty();
+    buildBody(!m_bodyModelPath.isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::buildBody(bool frame)
+{
+    m_source = BodySource::Parametric;
     m_bodyModelPath.clear();
-    m_body = ParametricBody::generate(m_measurementsPanel->measurements());
+
+    const BodyMeasurements measurements = m_measurementsPanel->measurements();
+    if (bodyKind() == BodyKind::Realistic)
+    {
+        QGuiApplication::setOverrideCursor(Qt::WaitCursor);
+        m_fit = MakeHumanFitter::fit(measurements);
+        QGuiApplication::restoreOverrideCursor();
+        if (m_fit.valid)
+        {
+            m_viewport->setMesh(m_fit.mesh, frame);
+            updateStatus();
+            return;
+        }
+        m_realisticError = m_fit.errorString;
+    }
+
+    m_body = ParametricBody::generate(measurements);
     m_viewport->setMesh(m_body.combined(), frame);
     updateStatus();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Workspace3DWindow::BodyKind Workspace3DWindow::bodyKind() const
+{
+    return m_bodyKindComboBox->currentIndex() == 0 ? BodyKind::Realistic : BodyKind::Mannequin;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -242,6 +276,9 @@ void Workspace3DWindow::createActions()
 
     QToolBar *toolBar = addToolBar(tr("3D Workspace"));
     toolBar->setObjectName(QStringLiteral("Seamly3DWorkspaceToolBar"));
+    toolBar->addWidget(new QLabel(tr("Body:"), toolBar));
+    toolBar->addWidget(m_bodyKindComboBox);
+    toolBar->addSeparator();
     toolBar->addAction(loadMeasurementsAction);
     toolBar->addAction(importAction);
     toolBar->addAction(exportAction);
@@ -258,6 +295,7 @@ void Workspace3DWindow::updateStatus()
 
     if (m_source == BodySource::Imported)
     {
+        m_statusLabel->setToolTip(QString());
         const QVector3D size = mesh.bounds().size();
         m_statusLabel->setText(tr("%1 - %2 vertices, %3 triangles, size %4 x %5 x %6")
                                    .arg(QFileInfo(m_bodyModelPath).fileName())
@@ -268,6 +306,23 @@ void Workspace3DWindow::updateStatus()
                                    .arg(size.z(), 0, 'g', 4));
         return;
     }
+
+    if (bodyKind() == BodyKind::Realistic && m_fit.valid)
+    {
+        // Report how well the body fits, so the user can trust it (or see what is not fitted yet).
+        QStringList notFitted;
+        for (const BodyMeasurement measurement : m_fit.unfitted())
+        {
+            notFitted.append(BodyMeasurements::displayName(measurement));
+        }
+        m_statusLabel->setText(tr("Realistic body fitted to %1 measurements, largest difference %2 cm.")
+                                   .arg(m_fit.entries.size() - notFitted.size())
+                                   .arg(m_fit.maxError(), 0, 'f', 2));
+        m_statusLabel->setToolTip(tr("Not fitted yet (follow the body's natural proportions): %1")
+                                      .arg(notFitted.join(QLatin1String(", "))));
+        return;
+    }
+    m_statusLabel->setToolTip(QString());
 
     // Measure the model like a tape measure would, so the user can see it really fits.
     const BodyMeasurements &m = m_body.measurements;

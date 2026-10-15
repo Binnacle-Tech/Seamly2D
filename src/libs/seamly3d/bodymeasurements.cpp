@@ -159,6 +159,30 @@ void BodyMeasurements::setValue(BodyMeasurement measurement, double centimeters)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+double BodyMeasurements::gender() const
+{
+    return m_gender;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void BodyMeasurements::setGender(double gender)
+{
+    m_gender = qBound(0.0, gender, 1.0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double BodyMeasurements::muscle() const
+{
+    return m_muscle;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void BodyMeasurements::setMuscle(double muscle)
+{
+    m_muscle = qBound(0.0, muscle, 1.0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void BodyMeasurements::scaleToHeight(double height)
 {
     const double current = value(BodyMeasurement::Height);
@@ -228,7 +252,8 @@ BodyMeasurements BodyMeasurements::sanitized() const
 //---------------------------------------------------------------------------------------------------------------------
 bool BodyMeasurements::operator==(const BodyMeasurements &other) const
 {
-    return m_values == other.m_values;
+    return m_values == other.m_values && qFuzzyCompare(m_gender + 1, other.m_gender + 1)
+           && qFuzzyCompare(m_muscle + 1, other.m_muscle + 1);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -261,6 +286,7 @@ bool BodyMeasurements::readVit(QIODevice *device, QStringList *applied)
     }
 
     QString unit = QStringLiteral("cm");
+    QString gender;
     QHash<BodyMeasurement, double> found;
     bool isIndividualFile = false;
 
@@ -279,6 +305,10 @@ bool BodyMeasurements::readVit(QIODevice *device, QStringList *applied)
         else if (xml.name() == QLatin1String("unit"))
         {
             unit = xml.readElementText().trimmed();
+        }
+        else if (xml.name() == QLatin1String("gender"))
+        {
+            gender = xml.readElementText().trimmed();
         }
         else if (xml.name() == QLatin1String("m"))
         {
@@ -328,7 +358,23 @@ bool BodyMeasurements::readVit(QIODevice *device, QStringList *applied)
     }
     names.sort();
 
+    if (gender == QLatin1String("male"))
+    {
+        result.setGender(1.0);
+    }
+    else if (gender == QLatin1String("female"))
+    {
+        result.setGender(0.0);
+    }
+    else
+    {
+        result.setGender(m_gender);
+    }
+    result.setMuscle(m_muscle);
+
     m_values = result.m_values;
+    m_gender = result.m_gender;
+    m_muscle = result.m_muscle;
     if (applied != nullptr)
     {
         *applied = names;

@@ -21,6 +21,9 @@ TEMPLATE = lib
 
 CONFIG += staticlib
 
+# The MakeHuman body data is a 4.4 MB resource: embed it as an object file instead of a huge generated C++ array.
+CONFIG += resources_big
+
 include(seamly3d.pri)
 
 # This is static library so no need in "make install"

@@ -42,12 +42,35 @@ context on Windows, macOS and Linux.
 | `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body. |
 | `Workspace3DIntegration` | The single hook into the 2D main window. |
 
+| `MakeHumanData`, `MakeHumanBody`, `MakeHumanFitter` (`makehuman/`) | Realistic body: MakeHuman's base mesh and targets, fitted to the measurements. AGPL port, see `makehuman/README.md`. |
+
 Unit tests for everything except the GL widgets are in `src/test/Seamly3DTest`.
 
 ## Body from measurements
 
 Enter your measurements in the **Body Measurements** panel, or load your
-SeamlyMe `.vit` file. The body in the viewport updates as you type.
+SeamlyMe `.vit` file. The body in the viewport updates as you type. The
+toolbar chooses between two body models.
+
+### Realistic (MakeHuman), the default
+
+* Gender and muscle tone come from the panel; age is adult.
+* MakeHuman's height macro, then its weight macro (overall build from bust,
+  waist and hip), then for female bodies its breast size macro (bust minus
+  lowbust) are searched by bisection. A uniform scale makes the height exact.
+* MakeHuman's measure modifiers then adjust each girth until it matches
+  within 0.05 cm along MakeHuman's own tape paths: neck, bust, lowbust,
+  waist, hip, thigh, knee, calf, ankle, upper arm and wrist, plus arm length.
+  The modifiers affect each other (bust and lowbust a lot), so they are solved
+  together with Newton steps. A fit takes about 20 ms in a release build.
+* Modifiers may go up to twice MakeHuman's slider range (targets
+  extrapolated linearly) to reach measurements outside it, such as a 36 cm
+  neck on a female body.
+* The status bar shows how closely the body fits. Its tooltip lists the
+  measurements that aren't fitted yet (the vertical landmarks other than
+  height, head, shoulder width); those follow MakeHuman's natural proportions.
+
+### Simple mannequin
 
 How it works:
 
@@ -63,8 +86,8 @@ How it works:
   can always be built.
 * The arms hang in an A-pose and open just enough to clear the bust.
 
-Known limitations of this first version: it is a dress-form-like mannequin,
-not an organic body. Joins at the shoulders and crotch are visible, there are
+Known limitations of the mannequin: it is dress-form-like, not an organic
+body. Joins at the shoulders and crotch are visible, there are
 no feet or fingers, and front/back and left/right asymmetry, posture and bust
 shape are not modeled. The roadmap covers these.
 
@@ -73,6 +96,8 @@ shape are not modeled. The roadmap covers these.
 [MakeHuman](https://github.com/makehumancommunity/makehuman) is a useful
 reference for parametric human models. It also exports OBJ files, which
 `ObjMeshReader` imports. Keep the licences in mind:
+
+The realistic body is a port of MakeHuman (see `makehuman/README.md`).
 
 * MakeHuman's **code** is AGPL-3.0, and Seamly2D is GPL-3.0-or-later.
   GPLv3 section 13 explicitly allows combining the two, so porting MakeHuman
@@ -96,8 +121,9 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [x] Body generated from measurements, with exact girths
    - [x] Measurements from SeamlyMe `.vit`, cm or inch
    - [x] OBJ import and export
-   - [ ] Organic base mesh morphed to the measurements (CC0 MakeHuman base mesh
-     as an option), smooth joins, feet and hands
+   - [x] Realistic body: MakeHuman base mesh and targets fitted to the girths
+   - [ ] Fit the vertical landmarks (waist, hip, knee heights) and shoulder
+     width with MakeHuman's length modifiers, and the head
    - [ ] More landmarks: across back and chest, front and back waist length,
      bust point spacing, posture and asymmetry
    - [ ] Units for imported models, and fitting an imported scan to measurements
