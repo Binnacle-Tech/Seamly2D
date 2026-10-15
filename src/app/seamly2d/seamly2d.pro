@@ -14,6 +14,9 @@ include(../../../common.pri)
 # library in installer.
 QT       += core gui widgets xml svg printsupport network multimedia
 
+# 3D workspace (Seamly3D library) renders with QOpenGLWidget.
+QT       += opengl openglwidgets
+
 # We want create executable file
 TEMPLATE = app
 
@@ -293,6 +296,15 @@ DEPENDPATH += $$PWD/../../libs/vmisc
 
 win32:!win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vmisc/$${DESTDIR}/vmisc.lib
 else:unix|win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/vmisc/$${DESTDIR}/libvmisc.a
+
+# Seamly3D static library (3D workspace)
+unix|win32: LIBS += -L$$OUT_PWD/../../libs/seamly3d/$${DESTDIR}/ -lseamly3d
+
+INCLUDEPATH += $$PWD/../../libs/seamly3d
+DEPENDPATH += $$PWD/../../libs/seamly3d
+
+win32:!win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/seamly3d/$${DESTDIR}/seamly3d.lib
+else:unix|win32-g++: PRE_TARGETDEPS += $$OUT_PWD/../../libs/seamly3d/$${DESTDIR}/libseamly3d.a
 
 # VObj static library
 unix|win32: LIBS += -L$$OUT_PWD/../../libs/vobj/$${DESTDIR}/ -lvobj

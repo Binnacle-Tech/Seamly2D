@@ -1,0 +1,110 @@
+/******************************************************************************
+ *   @file   workspace3dwindow.h
+ **  @author Seamly2D project
+ **  @date   15 10, 2026
+ **
+ **  @brief  Top level window of the 3D workspace.
+ **
+ **  @copyright
+ **  Copyright (C) 2026 Seamly2D project
+ **  <https://github.com/fashionfreedom/seamly2d> All Rights Reserved.
+ **
+ **  Seamly2D is free software: you can redistribute it and/or modify
+ **  it under the terms of the GNU General Public License as published by
+ **  the Free Software Foundation, either version 3 of the License, or
+ **  (at your option) any later version.
+ **
+ **  Seamly2D is distributed in the hope that it will be useful,
+ **  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ **  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ **  GNU General Public License for more details.
+ **
+ **  You should have received a copy of the GNU General Public License
+ **  along with Seamly2D.  If not, see <http://www.gnu.org/licenses/>.
+ **
+ *****************************************************************************/
+
+#ifndef SEAMLY3D_WORKSPACE3DWINDOW_H
+#define SEAMLY3D_WORKSPACE3DWINDOW_H
+
+#include <QMainWindow>
+#include <QString>
+
+#include "makehuman/makehumanfitter.h"
+#include "parametricbody.h"
+
+class QAction;
+class QComboBox;
+class QLabel;
+class QThread;
+class QTimer;
+
+namespace Seamly3D
+{
+
+class BodyMeasurementsPanel;
+class Viewport3D;
+
+/**
+ * @brief Top level window of the 3D workspace.
+ *
+ * Shows a body (avatar) fitted to the user's measurements, or an imported body model, in a 3D viewport. The fitted
+ * body is the realistic MakeHuman body when its data is available, or the simple mannequin. It is
+ * independent of the 2D main window so the 3D workspace can grow (garments, sewing, simulation) without touching the
+ * 2D code.
+ */
+class Workspace3DWindow : public QMainWindow
+{
+    Q_OBJECT
+
+public:
+    explicit Workspace3DWindow(QWidget *parent = nullptr);
+    ~Workspace3DWindow() override;
+
+    Viewport3D            *viewport() const;
+    BodyMeasurementsPanel *measurementsPanel() const;
+
+    bool        loadBodyModel(const QString &fileName);
+    void        setBodyMeasurements(const BodyMeasurements &measurements);
+
+public slots:
+    void        importBodyModel();
+    void        exportBodyModel();
+    void        useParametricBody();
+
+private slots:
+    void        regenerateBody();
+
+private:
+    Q_DISABLE_COPY_MOVE(Workspace3DWindow)
+
+    enum class BodySource : char { Parametric, Imported };
+    enum class BodyKind : char { Realistic, Mannequin };
+
+    void        createActions();
+    void        updateStatus();
+    void        buildBody(bool frame);
+    void        startFit(bool frame);
+    void        showBody(bool frame);
+    BodyKind    bodyKind() const;
+
+    Viewport3D            *m_viewport;
+    BodyMeasurementsPanel *m_measurementsPanel;
+    QLabel                *m_statusLabel;
+    QTimer                *m_regenerateTimer;
+    QComboBox             *m_bodyKindComboBox;
+
+    BodySource  m_source{BodySource::Parametric};
+    BodyModel   m_body{};          ///< Simple mannequin
+    MakeHumanFit m_fit{};          ///< Realistic body
+    QString     m_realisticError{};
+    QThread    *m_fitThread{nullptr};   ///< Fits run in the background so typing stays responsive
+    bool        m_refitPending{false};  ///< Measurements changed while a fit was running
+    bool        m_framePending{false};
+    QString     m_bodyModelPath{};
+    QString     m_lastDirectory{};
+};
+
+} // namespace Seamly3D
+
+#endif // SEAMLY3D_WORKSPACE3DWINDOW_H
