@@ -74,10 +74,13 @@ shape are not modeled. The roadmap covers these.
 reference for parametric human models. It also exports OBJ files, which
 `ObjMeshReader` imports. Keep the licences in mind:
 
-* MakeHuman's **code** is AGPL-3.0, and Seamly2D is GPL-3.0. Don't copy
-  MakeHuman source into this library. Study its approach (a base mesh
-  morphed by targets and modifiers, measurement-driven modifiers, the
-  skeleton) and write our own implementation, as `ParametricBody` does.
+* MakeHuman's **code** is AGPL-3.0, and Seamly2D is GPL-3.0-or-later.
+  GPLv3 section 13 explicitly allows combining the two, so porting MakeHuman
+  code is allowed. Ported files keep their AGPL-3.0 terms and copyright
+  notices; keep them in their own files or directory and say so in their
+  headers. MakeHuman is written in Python and Seamly2D in C++, so "using its
+  code" means porting it (base mesh + morph targets, modifiers, the measure
+  plugin), not linking it.
 * MakeHuman's **assets** (base mesh, targets) and the models users export
   from it are CC0, so they're fine as test or sample avatars, or as the
   base mesh for a future morphing body.
