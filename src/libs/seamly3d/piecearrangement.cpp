@@ -29,6 +29,9 @@
 #include <QtMath>
 
 #include <functional>
+#include <limits>
+
+#include "meshslicer.h"
 
 namespace Seamly3D
 {
@@ -39,6 +42,8 @@ namespace
 const float clearance = 4.0f;     // centimeters between the body and the pieces wrapped around it
 const float shoulderLift = 4.0f;  // centimeters from the back of the neck up to above the shoulder seams
 const float asideSpacing = 15.0f; // centimeters between pieces hung beside the body
+const float waistLift = 2.0f;     // centimeters from the waist up to the top of skirts and trousers
+const float legClearance = 2.5f;  // centimeters between the legs and the trouser pieces wrapped around them
 
 //---------------------------------------------------------------------------------------------------------------------
 /** @brief wrap bends a piece around a vertical cylinder; @p angle is where the piece's u = 0 line goes. */
@@ -69,9 +74,97 @@ PiecePlacement opposite(PiecePlacement placement)
             return PiecePlacement::RightSleeve;
         case PiecePlacement::RightSleeve:
             return PiecePlacement::LeftSleeve;
+        case PiecePlacement::LeftLegFront:
+            return PiecePlacement::RightLegFront;
+        case PiecePlacement::LeftLegBack:
+            return PiecePlacement::RightLegBack;
+        case PiecePlacement::RightLegFront:
+            return PiecePlacement::LeftLegFront;
+        case PiecePlacement::RightLegBack:
+            return PiecePlacement::LeftLegBack;
         default:
             return placement;
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief legPiece wraps a trouser piece around the left leg, or the right one (mirrored). */
+Mesh legPiece(const Mesh &flat, const QRectF &bounds, PiecePlacement placement, bool mirrored, bool flip,
+              const BodyFrame &frame)
+{
+    const auto top = static_cast<float>(bounds.top());
+    const auto height = static_cast<float>(bounds.height());
+
+    // The crease runs down the middle of the hem; the top of the piece leans to the side seam.
+    float hemLeft = std::numeric_limits<float>::max();
+    float hemRight = std::numeric_limits<float>::lowest();
+    float topSum = 0;
+    int topCount = 0;
+    for (const QVector3D &p : flat.positions)
+    {
+        if (p.y() > top + height * 0.8f)
+        {
+            hemLeft = qMin(hemLeft, p.x());
+            hemRight = qMax(hemRight, p.x());
+        }
+        else if (p.y() < top + height * 0.2f)
+        {
+            topSum += p.x();
+            ++topCount;
+        }
+    }
+    const float crease = hemLeft <= hemRight ? (hemLeft + hemRight) / 2 : static_cast<float>(bounds.center().x());
+    float outward = topCount > 0 && topSum / static_cast<float>(topCount) < crease ? -1.0f : 1.0f;
+    if (flip)
+    {
+        outward = -outward;
+    }
+    // Across the piece from the crease, positive toward the side seam; the center front (or back) is at the top.
+    const auto across = [crease, outward](const QVector3D &p) { return outward * (p.x() - crease); };
+    float center = 0;
+    for (const QVector3D &p : flat.positions)
+    {
+        if (p.y() < top + height * 0.2f)
+        {
+            center = qMin(center, across(p));
+        }
+    }
+
+    const bool back = placement == PiecePlacement::LeftLegBack || placement == PiecePlacement::RightLegBack;
+    const bool right = (placement == PiecePlacement::RightLegFront || placement == PiecePlacement::RightLegBack)
+                       != mirrored;
+    const float waist = frame.waistHeight + waistLift;
+    // Down the leg, the piece wraps around the leg; up from the top of the thigh it blends into the hips.
+    const float blendLow = frame.crotchHeight - 6.0f;
+    const float blendHigh = qMax(frame.hipHeight, blendLow + 4.0f);
+
+    Mesh mesh = flat;
+    for (QVector3D &p : mesh.positions)
+    {
+        const float u = across(p);
+        const float y = waist - (p.y() - top);
+
+        const QVector3D axis = frame.legAxis(y);
+        const float radius = qMin(frame.legRadius(y) + legClearance, qMax(1.0f, axis.x() - 0.5f));
+        const float legAngle = u / radius;
+        const float hipAngle = (u - center) / frame.hipRadius;
+        const auto around = [back](float angle)
+        { return QVector3D(qSin(angle), 0, back ? -qCos(angle) : qCos(angle)); };
+        const QVector3D onLeg = QVector3D(axis.x(), y, axis.z()) + around(legAngle) * radius;
+        const QVector3D onHips = QVector3D(0, y, 0) + around(hipAngle) * frame.hipRadius;
+
+        float t = qBound(0.0f, (y - blendLow) / (blendHigh - blendLow), 1.0f);
+        t = t * t * (3 - 2 * t);
+        QVector3D position = onLeg * (1 - t) + onHips * t;
+        position.setX(qMax(position.x(), 0.3f)); // a leg stays on its own side of the body
+        if (right)
+        {
+            position.setX(-position.x());
+        }
+        p = position;
+    }
+    mesh.computeNormals();
+    return mesh;
 }
 
 } // anonymous namespace
@@ -96,7 +189,108 @@ BodyFrame BodyFrame::fromMeasurements(const BodyMeasurements &measurements)
     frame.leftShoulder = QVector3D(value(BodyMeasurement::ShoulderWidth) * 0.45f, frame.shoulderHeight - frame.armRadius, 0);
     frame.leftWrist = frame.leftShoulder
                       + QVector3D(qSin(angle), -qCos(angle), 0) * value(BodyMeasurement::ArmLength);
+
+    const auto radius = [&value](BodyMeasurement girth) { return value(girth) / (2 * static_cast<float>(M_PI)); };
+    frame.waistHeight = value(BodyMeasurement::WaistHeight);
+    frame.hipHeight = value(BodyMeasurement::HipHeight);
+    frame.crotchHeight = value(BodyMeasurement::CrotchHeight);
+    frame.kneeHeight = value(BodyMeasurement::KneeHeight);
+    frame.ankleHeight = value(BodyMeasurement::AnkleHeight);
+    frame.hipRadius = radius(BodyMeasurement::HipCirc) + clearance;
+    frame.thighRadius = radius(BodyMeasurement::ThighCirc);
+    frame.kneeRadius = radius(BodyMeasurement::KneeCirc);
+    frame.ankleRadius = radius(BodyMeasurement::AnkleCirc);
+    // The thighs touch at the crotch; the legs stand a little apart.
+    const float legX = qMax(frame.thighRadius, radius(BodyMeasurement::HipCirc) * 0.5f);
+    frame.leftHip = QVector3D(legX, frame.crotchHeight, 0);
+    frame.leftKnee = QVector3D(legX + 1.0f, frame.kneeHeight, 0);
     return frame;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+BodyFrame BodyFrame::withLegs(const Mesh &body) const
+{
+    // The left leg is the biggest loop left of the center, but not as far out as the hand.
+    const auto leg = [&body, this](float height, QVector3D *center, float *radius)
+    {
+        double longest = 0;
+        for (const MeshSlicer::Contour &contour : MeshSlicer::sliceAtHeight(body, height))
+        {
+            if (!contour.closed || contour.points.size() < 3)
+            {
+                continue;
+            }
+            QVector3D sum;
+            double length = 0;
+            for (int i = 0; i < contour.points.size(); ++i)
+            {
+                const QVector3D &a = contour.points.at(i);
+                const QVector3D &b = contour.points.at((i + 1) % contour.points.size());
+                const float segment = (b - a).length();
+                sum += (a + b) / 2 * segment;
+                length += static_cast<double>(segment);
+            }
+            if (length < 1e-6)
+            {
+                continue;
+            }
+            const QVector3D middle = sum / static_cast<float>(length);
+            if (middle.x() < 1.0f || middle.x() > hipRadius * 1.2f || length <= longest)
+            {
+                continue;
+            }
+            longest = length;
+            *center = middle;
+            *radius = static_cast<float>(length / (2 * M_PI));
+        }
+        return longest > 0;
+    };
+
+    QVector3D thigh;
+    QVector3D knee;
+    float thighR = 0;
+    float kneeR = 0;
+    const float thighHeight = crotchHeight - 5.0f;
+    if (!leg(thighHeight, &thigh, &thighR) || !leg(kneeHeight, &knee, &kneeR) || thighHeight - kneeHeight < 1.0f)
+    {
+        return *this;
+    }
+    BodyFrame frame = *this;
+    const QVector3D step = (thigh - knee) / (thighHeight - kneeHeight); // per centimeter up
+    frame.leftHip = knee + step * (crotchHeight - kneeHeight);
+    frame.leftKnee = knee;
+    frame.thighRadius = thighR;
+    frame.kneeRadius = kneeR;
+    return frame;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector3D BodyFrame::legAxis(float height) const
+{
+    const float span = leftHip.y() - leftKnee.y();
+    if (qAbs(span) < 1e-3f)
+    {
+        return QVector3D(leftHip.x(), height, leftHip.z());
+    }
+    QVector3D axis = leftKnee + (leftHip - leftKnee) * ((height - leftKnee.y()) / span);
+    axis.setY(height);
+    return axis;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+float BodyFrame::legRadius(float height) const
+{
+    if (height >= crotchHeight)
+    {
+        return thighRadius;
+    }
+    if (height >= kneeHeight)
+    {
+        const float t = (height - kneeHeight) / qMax(1.0f, crotchHeight - kneeHeight);
+        return kneeRadius + (thighRadius - kneeRadius) * t;
+    }
+    const float t = qBound(0.0f, (height - ankleHeight) / qMax(1.0f, kneeHeight - ankleHeight), 1.0f);
+    return ankleRadius + (kneeRadius - ankleRadius) * t;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -137,6 +331,15 @@ PiecePlacement PieceArrangement::guess(const QString &name)
     {
         return PiecePlacement::Aside;
     }
+    const bool back = has({"back", "rück", "rueck", "dos", "espalda", "rug", "dietro", "retro"});
+    if (has({"trouser", "pant", "short", "jean", "leg", "hose", "bein", "pantal", "broek", "calzon"}))
+    {
+        return back ? PiecePlacement::LeftLegBack : PiecePlacement::LeftLegFront;
+    }
+    if (has({"skirt", "rock", "jupe", "falda", "rok", "gonna", "saia"}))
+    {
+        return back ? PiecePlacement::LowerBack : PiecePlacement::LowerFront;
+    }
     if (has({"back", "rück", "rueck", "dos", "espalda", "rug", "dietro", "retro"}))
     {
         return PiecePlacement::Back;
@@ -169,6 +372,18 @@ QString PieceArrangement::displayName(PiecePlacement placement)
             return tr("Left sleeve");
         case PiecePlacement::RightSleeve:
             return tr("Right sleeve");
+        case PiecePlacement::LowerFront:
+            return tr("Front, from the waist");
+        case PiecePlacement::LowerBack:
+            return tr("Back, from the waist");
+        case PiecePlacement::LeftLegFront:
+            return tr("Left leg, front");
+        case PiecePlacement::LeftLegBack:
+            return tr("Left leg, back");
+        case PiecePlacement::RightLegFront:
+            return tr("Right leg, front");
+        case PiecePlacement::RightLegBack:
+            return tr("Right leg, back");
         case PiecePlacement::Aside:
             return tr("Beside the body");
         case PiecePlacement::Hidden:
@@ -202,18 +417,36 @@ QVector<Mesh> PieceArrangement::place(const Mesh &flat, const QRectF &bounds, Pi
     {
         case PiecePlacement::Front:
         case PiecePlacement::Back:
+        case PiecePlacement::LowerFront:
+        case PiecePlacement::LowerBack:
         {
-            const float angle = placement == PiecePlacement::Front ? 0.0f : static_cast<float>(M_PI);
+            const bool front = placement == PiecePlacement::Front || placement == PiecePlacement::LowerFront;
+            const bool lower = placement == PiecePlacement::LowerFront || placement == PiecePlacement::LowerBack;
+            const float angle = front ? 0.0f : static_cast<float>(M_PI);
+            const float radius = lower ? frame.hipRadius : frame.torsoRadius;
+            const float top = lower ? frame.waistHeight + waistLift : frame.neckHeight;
             if (!pair)
             {
-                result.append(wrap(flat, 0, 0, frame.torsoRadius, angle, frame.neckHeight, centered, v));
+                result.append(wrap(flat, 0, 0, radius, angle, top, centered, v));
                 break;
             }
             // A half piece: one edge on the center line, the mirrored copy on the other side of it.
             const auto fromEdge = [minX, maxX, flip](const QVector3D &p) { return flip ? maxX - p.x() : p.x() - minX; };
-            result.append(wrap(flat, 0, 0, frame.torsoRadius, angle, frame.neckHeight, fromEdge, v));
-            result.append(wrap(flat, 0, 0, frame.torsoRadius, angle, frame.neckHeight,
+            result.append(wrap(flat, 0, 0, radius, angle, top, fromEdge, v));
+            result.append(wrap(flat, 0, 0, radius, angle, top,
                                [&fromEdge](const QVector3D &p) { return -fromEdge(p); }, v));
+            break;
+        }
+        case PiecePlacement::LeftLegFront:
+        case PiecePlacement::LeftLegBack:
+        case PiecePlacement::RightLegFront:
+        case PiecePlacement::RightLegBack:
+        {
+            result.append(legPiece(flat, bounds, placement, false, flip, frame));
+            if (pair)
+            {
+                result.append(legPiece(flat, bounds, placement, true, flip, frame));
+            }
             break;
         }
         case PiecePlacement::LeftSide:

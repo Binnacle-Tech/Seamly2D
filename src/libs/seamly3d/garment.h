@@ -86,11 +86,12 @@ struct Seam
  * @brief Finds the seams of a garment from its arranged pieces.
  *
  * Two edges are sewn together when they have the same length (within 5%) and the same shape (one bulges where the
- * other curves in, or both are straight), are on the same side of the body and lie close together once the pieces
- * are arranged: side seams, shoulder seams, the center line of a piece cut on the fold with its mirrored copy, the
- * underarm seam of a sleeve. Armholes and necklines are left open: sleeves and collars are eased into them. Two
- * neighbouring edges of the same length meeting at a sharp point are a dart and are sewn closed. Hems (the bottom edge
- * of a piece) are never sewn.
+ * other curves in, both are straight, or both bulge out alike), are on the same side of the body and lie close
+ * together once the pieces are arranged: side seams, shoulder seams, the center line of a piece cut on the fold with
+ * its mirrored copy, the underarm seam of a sleeve. Two edges that both curve in are sewn only when they already lie
+ * together (the inseams and crotch seams of trousers): armholes and necklines are left open, as sleeves and collars
+ * are eased into them. Two neighbouring edges of the same length meeting at a sharp point are a dart and are sewn
+ * closed. Hems (the bottom edge of a piece) and waistlines (a straight top edge) are never sewn.
  *
  * Then sleeves are set in: an edge left over that bulges out (a sleeve cap) is sewn to two edges left over that curve
  * in (the front and back armholes) on the same side of the body, when it is as long as both together or up to 15%
@@ -103,6 +104,7 @@ public:
 
     static constexpr double lengthTolerance = 0.05; ///< relative
     static constexpr double maxDistance = 35.0;     ///< centimeters between the edges once arranged
+    static constexpr double closeMiddles = 10.0;    ///< centimeters: two edges curving in this close are sewn
 };
 
 } // namespace Seamly3D

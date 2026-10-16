@@ -66,6 +66,8 @@ private:
         QVector3D a, b, c;    // corners
         QVector3D na, nb, nc; // vertex normals, outward
         QVector3D face;       // face normal, outward
+        QVector3D center;     // of the smallest sphere around the corners, roughly
+        float     radius;
     };
 
     int cellIndex(int x, int y, int z) const;
@@ -86,7 +88,7 @@ private:
 struct ClothSettings
 {
     float frameTime{1.0f / 30.0f};
-    int   substeps{10};             ///< Solver steps per frame; more is stiffer and slower
+    int   substeps{30};             ///< Solver steps per frame; more is stiffer and slower. A waistband needs 30
     int   iterations{4};            ///< Passes over the stretch and seam constraints in each step
     float gravity{981.0f};          ///< cm/s²
     float stretchCompliance{0.0f};  ///< 0: the fabric does not stretch
@@ -170,7 +172,7 @@ public:
     QVector<QVector<float>> easeMap(float limit = 6.0f) const;
     bool  isSewn() const;       ///< all seams have been pulled closed
 
-    static constexpr float maxStep = 1.0f; ///< centimeters a particle may move in one solver step
+    static constexpr float maxStep = 0.5f; ///< centimeters a particle may move in one solver step
 
 private:
     struct Distance
@@ -190,10 +192,17 @@ private:
         float start; ///< the gap when sewing started
     };
 
+    /** @brief The constraints of one panel: [begin, end) in m_stretch and m_bend. */
+    struct Ranges
+    {
+        int stretchBegin, stretchEnd;
+        int bendBegin, bendEnd;
+    };
+
     void substep(float h, float gravity, float sewingTarget);
-    void solveDistances(const QVector<Distance> &constraints, float compliance, float h);
+    void solveDistances(const QVector<Distance> &constraints, int begin, int end, float compliance, float h);
     void solveSeams(float target);
-    void collide();
+    void collide(int begin, int end, float h);
     void addSeam(const Seam &seam);
     QVector3D seamPoint(const SeamLink &link) const;
 
@@ -210,6 +219,7 @@ private:
     QVector<float>        m_inverseMass{};
     QVector<Distance>     m_stretch{};
     QVector<Distance>     m_bend{};
+    QVector<Ranges>       m_ranges{};    ///< Per panel: panels share no particles, so they are solved side by side
     QVector<SeamLink>     m_seams{};
     int                   m_seamCount{0};
     float                 m_sewingTime{0};

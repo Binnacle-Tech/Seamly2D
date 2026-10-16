@@ -49,6 +49,12 @@ enum class PiecePlacement : int
     RightSide,
     LeftSleeve,
     RightSleeve,
+    LowerFront,    ///< From the waist down, around the hips (skirts)
+    LowerBack,
+    LeftLegFront,  ///< From the waist down the leg (trousers, shorts)
+    LeftLegBack,
+    RightLegFront,
+    RightLegBack,
     Aside,     ///< Hung flat behind the body (collars, pockets, facings...)
     Hidden,
     Count
@@ -67,11 +73,31 @@ struct BodyFrame
     QVector3D leftShoulder{18.0f, 135.0f, 0.0f}; ///< Left arm axis at the shoulder tip; the right arm mirrors it
     QVector3D leftWrist{50.0f, 95.0f, 0.0f};     ///< Left arm axis at the wrist
 
+    float waistHeight{103.5f};     ///< where the top of skirts and trousers goes
+    float hipHeight{85.5f};
+    float crotchHeight{76.0f};
+    float kneeHeight{47.0f};
+    float ankleHeight{8.0f};
+    float hipRadius{20.0f};        ///< radius of the cylinder skirts wrap around (hips plus clearance)
+    float thighRadius{9.0f};       ///< leg girths as radii, at the crotch, knee and ankle
+    float kneeRadius{6.0f};
+    float ankleRadius{3.5f};
+    QVector3D leftHip{9.0f, 76.0f, 0.0f};  ///< Left leg axis at the crotch
+    QVector3D leftKnee{9.5f, 47.0f, 0.0f}; ///< Left leg axis at the knee
+
     /** @brief fromMeasurements estimates the frame; the arm is assumed in an A-pose, about 40 degrees out. */
     static BodyFrame fromMeasurements(const BodyMeasurements &measurements);
 
     /** @brief withArm uses the arm of the body actually shown (its pose differs from body to body). */
     BodyFrame withArm(const QVector3D &shoulder, const QVector3D &wrist) const;
+
+    /** @brief withLegs finds the legs of the body shown, by cutting it at the thigh and the knee. */
+    BodyFrame withLegs(const Mesh &body) const;
+
+    /** @brief legAxis returns the left leg axis at @p height. */
+    QVector3D legAxis(float height) const;
+    /** @brief legRadius returns the left leg radius at @p height, from the thigh to the ankle. */
+    float     legRadius(float height) const;
 };
 
 /**
@@ -80,7 +106,12 @@ struct BodyFrame
  * Torso pieces are wrapped around a cylinder just outside the body, sleeves around cylinders beside the arms; the
  * pattern reads the right way round when seen from outside. Wrapping bends without stretching, so piece sizes stay
  * true. A piece cut twice (or on the fold) gets a mirrored copy: around the center line for front and back, on the
- * other side for sides and sleeves.
+ * other side for sides, sleeves and legs.
+ *
+ * Skirts wrap around the hips from the waist down. A trouser leg piece wraps around its leg with the middle of its
+ * hem (where the crease runs) in front of the leg, or behind it, and its upper part blends into the hip cylinder so
+ * the crotch curve reaches the center line. The side seam goes to the outside of the leg: it is the side the top of
+ * the piece leans to, the crotch extension sticking out on the other side.
  */
 class PieceArrangement
 {

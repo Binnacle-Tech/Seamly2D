@@ -115,6 +115,30 @@ bool isHem(const GarmentPanel &panel, int edge)
 
 //---------------------------------------------------------------------------------------------------------------------
 /**
+ * @brief A waistline runs straight along the top of the flat piece: the top of a skirt, of trousers, of a strapless
+ * bodice. Shoulders slope, necklines curve down, so they are not.
+ */
+bool isWaistline(const GarmentPanel &panel, int edge)
+{
+    float top = std::numeric_limits<float>::max();
+    for (int v = 0; v < panel.outlineCount; ++v)
+    {
+        top = qMin(top, panel.rest.positions.at(v).y());
+    }
+
+    const QVector<int> vertices = panel.edgeVertices(edge);
+    for (const int v : vertices)
+    {
+        if (panel.rest.positions.at(v).y() - top > 1.5f) // centimeters below the top
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
  * @brief How far the edge bulges out of the flat piece, from the straight line between its ends: positive when it
  * bulges out (a sleeve cap), negative when it curves into the piece (an armhole, a neckline), centimeters.
  */
@@ -309,7 +333,7 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
             info.start = panel.shape.positions.at(vertices.constFirst());
             info.end = panel.shape.positions.at(vertices.constLast());
             info.middle = panel.shape.positions.at(vertices.at(vertices.size() / 2));
-            info.hem = isHem(panel, e);
+            info.hem = isHem(panel, e) || isWaistline(panel, e);
             info.bulge = bulge(panel, e);
             if (info.length >= 2.0 && !info.hem)
             {
@@ -362,10 +386,20 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
             }
 
             // Edges sewn together have the same shape: where one bulges out the other curves in (a princess seam), or
-            // both are straight (side and shoulder seams). Two armholes, or two necklines, both curve in.
-            if (qAbs(a.bulge + b.bulge) > qMax(1.0, 0.06 * a.length))
+            // both are straight, or both bulge out alike (side seams over the hips). Two armholes, or two necklines,
+            // both curve in; so do the inseams and crotch seams of trousers, but those already lie together once
+            // arranged.
+            const auto middleDistance = static_cast<double>((a.middle - b.middle).length());
+            const double tolerance = qMax(1.0, 0.06 * a.length);
+            if (qAbs(a.bulge + b.bulge) > tolerance)
             {
-                continue;
+                const bool alike = qAbs(a.bulge - b.bulge) <= tolerance;
+                const bool bothOut = alike && a.bulge > 0 && b.bulge > 0;
+                const bool bothIn = alike && a.bulge < 0 && b.bulge < 0;
+                if (!bothOut && !(bothIn && middleDistance <= closeMiddles))
+                {
+                    continue;
+                }
             }
 
             // Same side of the body (seams do not cross the center), unless both sit on the center line.
@@ -378,7 +412,6 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
 
             // Edges sewn together run side by side: their ends and their middles are close. (The front and back
             // armholes share their ends, but their middles are apart.)
-            const auto middleDistance = static_cast<double>((a.middle - b.middle).length());
             const double same =
                 (static_cast<double>((a.start - b.start).length() + (a.end - b.end).length()) + middleDistance) / 3;
             const double crossed =

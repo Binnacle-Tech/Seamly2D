@@ -145,12 +145,20 @@ and draping:
   stretching around a cylinder just outside the body (front, back, sides),
   or around the arm for sleeves, from the shoulder tip toward the wrist.
   Collars, pockets and other pieces hang flat beside the body.
-* Where a piece goes is guessed from its name (front, back, sleeve, collar...,
-  also in German, French, Spanish, Dutch and Italian). You can change it per
-  piece, or hide the piece.
+* **Skirts** (front or back, from the waist) wrap around the hips from the
+  waist down. **Trouser legs** (left or right leg, front or back) wrap around
+  the leg, the crease (the middle of the hem) in front of it or behind it,
+  and blend into the hips above the thigh so the crotch curve reaches the
+  center line. The side seam goes outside: it is the side the top of the
+  piece leans to, the crotch extension sticking out on the other. The legs
+  are found on the body shown, by cutting it at the thigh and the knee.
+* Where a piece goes is guessed from its name (front, back, sleeve, collar,
+  skirt, trouser, pants..., also in German, French, Spanish, Dutch and
+  Italian). You can change it per piece, or hide the piece.
 * **Pair:** a piece cut twice or on the fold gets a mirrored copy, on the
-  other side of the center line or on the other arm. **Flip** mirrors the
-  piece when its center line is on the other side.
+  other side of the center line, on the other arm or on the other leg.
+  **Flip** mirrors the piece when its center line (or, for a trouser leg,
+  its side seam) is on the other side.
 * **Follow pattern changes** updates the pieces while you edit the pattern in
   2D, and keeps each piece's settings.
 * **Use Pattern's Measurements** fits the body to the measurement file the
@@ -165,13 +173,17 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
 
 * **Seams are found automatically.** A piece's edges are its sides: they run
   between the points where its outline turns sharply (more than 25 degrees),
-  so notches and points along a smooth curve do not split them. Two edges are sewn together when they
-  are as long as each other (within 5%), have the same shape (one bulges where
-  the other curves in, or both are straight), and lie side by side on the same
-  side of the body once arranged: side and shoulder seams, the center line of
-  a piece cut on the fold and its mirrored copy, the underarm seam of a
-  sleeve, darts. A sleeve cap is set into the front and back armholes beside
-  it, with up to 15% ease. Necklines and hems stay open.
+  so notches and points along a smooth curve do not split them. Two edges are
+  sewn together when they are as long as each other (within 5%), have the
+  same shape (one bulges where the other curves in, both are straight, or
+  both bulge out alike over the hips), and lie side by side on the same side
+  of the body once arranged: side and shoulder seams, the center line of a
+  piece cut on the fold and its mirrored copy, the underarm seam of a sleeve,
+  darts. Two edges that both curve in are sewn only when they already lie
+  together: the inseams and crotch seams of trousers, but not armholes or
+  necklines. A sleeve cap is set into the front and back armholes beside it,
+  with up to 15% ease. Necklines, waistlines (a straight top edge) and hems
+  stay open.
 * **Seams list:** every seam, with its color. Uncheck a seam to leave it open;
   **Add Seam...** sews two edges you pick (each listed with its length, and
   shown in yellow in 3D while you choose; the ends that meet are chosen from
@@ -182,8 +194,12 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
 * **Show seams** draws each seam in 3D as its two edges in its color, with
   ties between the points that meet, on the pieces as arranged and on the
   cloth as it drapes. Selecting a seam in the list shows its edges in yellow.
-* **Simulation:** position based dynamics (XPBD) in small steps, 10 per frame,
-  each passing four times over the stretch and seam constraints. Woven
+* **Simulation:** position based dynamics (XPBD) in small steps, 30 per frame,
+  each passing four times over the stretch and seam constraints. That many
+  steps let a waistline, pressed onto the body, pull itself back up: skirts
+  and trousers hang from the waist instead of slipping over the hips (with
+  10 steps they slid down). The pieces are solved side by side on all
+  processor cores, and so is the collision with the body. Woven
   fabrics keep the lengths of the flat piece; knits stretch. Seams pull their
   two edges together at 30 cm/s with gravity off, then gravity drapes the
   garment. The body pushes the cloth out
@@ -204,7 +220,10 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
 
 Not there yet: collars and waistbands sewn to necklines (pieces hung beside
 the body are not sewn), self collision (cloth folding through itself), a
-fabric per piece, and picking seam edges in 3D or on the 2D pieces.
+fabric per piece, and picking seam edges in 3D or on the 2D pieces. A
+waistline holding a garment up still stretches a few percent (about 4% for
+a skirt and 8% for trousers on the default body) where woven fabric would
+not, so it sits a little low.
 
 ### Importing SVG and DXF patterns
 
@@ -303,7 +322,8 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [x] Read-only adapter that gets the pieces and measurements of the open
      pattern (`PatternSource`)
    - [x] Arrangement around the avatar (front, back, sides, sleeves along the
-     arms, pieces beside the body), pairs for pieces cut twice or on the fold
+     arms, skirts from the waist, trouser legs around the legs, pieces beside
+     the body), pairs for pieces cut twice or on the fold
    - [ ] Drag pieces in 3D; use grainlines and notches for orientation
    - [x] Import DXF patterns from other CAD systems (AAMA/ASTM) as
      parametric Seamly2D patterns
@@ -323,7 +343,9 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [ ] Self collision; a smoothed collision body for the finest details
    - [x] Fabric presets (cotton, linen, denim, jersey, silk, fleece, leather)
      mapped to stretch, stiffness, weight, friction and thickness
-   - [ ] Per piece fabrics, custom fabrics; multithreaded solver
+   - [x] Solver on all processor cores (pieces side by side); 30 steps per
+     frame so waistbands hold
+   - [ ] Per piece fabrics, custom fabrics
 5. **Fit analysis**
    - [x] Stretch map and ease (distance from the body) map, with a legend
    - [ ] Pressure map, girths of the garment measured with `MeshSlicer`

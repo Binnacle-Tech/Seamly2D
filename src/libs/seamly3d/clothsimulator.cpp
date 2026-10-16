@@ -28,9 +28,13 @@
 
 #include <QHash>
 #include <QPair>
+#include <QSemaphore>
+#include <QThread>
+#include <QThreadPool>
 #include <QtMath>
 
 #include <algorithm>
+#include <functional>
 #include <limits>
 
 namespace Seamly3D
@@ -38,6 +42,39 @@ namespace Seamly3D
 
 namespace
 {
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief parallelFor runs task(0) .. task(count - 1) on the threads of the global pool, and waits for them. */
+void parallelFor(int count, const std::function<void(int)> &task)
+{
+    if (count <= 1 || QThread::idealThreadCount() <= 1)
+    {
+        for (int i = 0; i < count; ++i)
+        {
+            task(i);
+        }
+        return;
+    }
+    QSemaphore done;
+    QThreadPool *pool = QThreadPool::globalInstance();
+    for (int i = 1; i < count; ++i)
+    {
+        pool->start([&task, &done, i]()
+                    {
+                        task(i);
+                        done.release();
+                    });
+    }
+    task(0);
+    done.acquire(count - 1);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief chunks splits @p count items into as many runs as there are threads, a few times over for balance. */
+int chunks(int count)
+{
+    return qBound(1, qMin(count / 256, QThread::idealThreadCount() * 4), 64);
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 /** @brief The point of triangle abc closest to p, and its barycentric coordinates (Ericson, Real-Time Collision
@@ -151,6 +188,9 @@ void BodyCollider::build(const Mesh &body, float reach, float cellSize)
         triangle.na = oriented.normals.at(i[0]) * outward;
         triangle.nb = oriented.normals.at(i[1]) * outward;
         triangle.nc = oriented.normals.at(i[2]) * outward;
+        triangle.center = (triangle.a + triangle.b + triangle.c) / 3;
+        triangle.radius = qMax(qMax((triangle.a - triangle.center).length(), (triangle.b - triangle.center).length()),
+                               (triangle.c - triangle.center).length());
         m_triangles.append(triangle);
     }
 
@@ -259,6 +299,12 @@ float BodyCollider::closest(const QVector3D &point, QVector3D *surface, QVector3
     for (int i = m_cellStart.at(index); i < m_cellStart.at(index + 1); ++i)
     {
         const Triangle &triangle = m_triangles.at(m_cellTriangles.at(i));
+        // No point of the triangle is nearer than its bounding sphere: skip those that cannot beat the best so far.
+        const float beyond = (point - triangle.center).length() - triangle.radius;
+        if (beyond > 0 && beyond * beyond >= best)
+        {
+            continue;
+        }
         float u, v, w;
         const QVector3D onTriangle = closestOnTriangle(point, triangle.a, triangle.b, triangle.c, u, v, w);
         const float distance = (point - onTriangle).lengthSquared();
@@ -311,7 +357,7 @@ const ClothSettings &ClothSimulator::settings() const
 void ClothSimulator::setBody(const Mesh &body)
 {
     // Reach: the thickness plus the farthest a particle may travel in one step (see maxStep).
-    m_body.build(body, m_settings.thickness + maxStep);
+    m_body.build(body, m_settings.thickness + maxStep, 1.0f);
     m_bodyMesh = body;
     m_easeBody.clear();
     m_easeLimit = 0;
@@ -329,6 +375,7 @@ void ClothSimulator::clear()
     m_inverseMass.clear();
     m_stretch.clear();
     m_bend.clear();
+    m_ranges.clear();
     m_seams.clear();
     m_seamCount = 0;
     m_sewingTime = 0;
@@ -349,9 +396,19 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
         m_offset.append(offset);
         m_position.append(panel.shape.positions);
         m_velocity.append(QVector<QVector3D>(panel.shape.positions.size()));
+        Ranges ranges;
+        ranges.stretchBegin = static_cast<int>(m_stretch.size());
+        ranges.bendBegin = static_cast<int>(m_bend.size());
+        const auto closeRanges = [this, &ranges]()
+        {
+            ranges.stretchEnd = static_cast<int>(m_stretch.size());
+            ranges.bendEnd = static_cast<int>(m_bend.size());
+            m_ranges.append(ranges);
+        };
         if (!panel.sewable)
         {
             m_inverseMass.append(QVector<float>(panel.shape.positions.size(), 0.0f));
+            closeRanges();
             continue;
         }
 
@@ -405,6 +462,8 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
                 }
             }
         }
+
+        closeRanges();
     }
     m_previous = m_position;
 
@@ -544,6 +603,7 @@ void ClothSimulator::step()
         return;
     }
 
+    const QVector<QVector3D> start = m_position;
     const int substeps = qMax(1, m_settings.substeps);
     const float h = m_settings.frameTime / static_cast<float>(substeps);
     for (int k = 0; k < substeps; ++k)
@@ -553,14 +613,16 @@ void ClothSimulator::step()
         substep(h, gravity, m_settings.sewingSpeed * m_time);
     }
 
+    // Speeds over the whole frame: within it, particles touching the body tremble by hundredths of a millimeter
+    // between the constraints and the body, which in a step this short reads as centimeters per second.
     m_maxSpeed = 0;
     double total = 0;
     int moving = 0;
-    for (int i = 0; i < m_velocity.size(); ++i)
+    for (int i = 0; i < m_position.size(); ++i)
     {
         if (m_inverseMass.at(i) > 0)
         {
-            const float speed = m_velocity.at(i).length();
+            const float speed = (m_position.at(i) - start.at(i)).length() / m_settings.frameTime;
             m_maxSpeed = qMax(m_maxSpeed, speed);
             total += static_cast<double>(speed);
             ++moving;
@@ -573,66 +635,74 @@ void ClothSimulator::step()
 void ClothSimulator::substep(float h, float gravity, float sewn)
 {
     const float keep = qExp(-m_settings.damping * h);
-    for (int i = 0; i < m_position.size(); ++i)
+    const int count = static_cast<int>(m_position.size());
+    QVector3D *position = m_position.data();
+    QVector3D *previous = m_previous.data();
+    QVector3D *velocity = m_velocity.data();
+    const float *inverseMass = m_inverseMass.constData();
+    for (int i = 0; i < count; ++i)
     {
-        if (m_inverseMass.at(i) <= 0)
+        if (inverseMass[i] <= 0)
         {
             continue;
         }
-        m_velocity[i].setY(m_velocity.at(i).y() - gravity * h);
-        m_velocity[i] *= keep;
-        m_previous[i] = m_position.at(i);
-        m_position[i] += m_velocity.at(i) * h;
+        velocity[i].setY(velocity[i].y() - gravity * h);
+        velocity[i] *= keep;
+        previous[i] = position[i];
+        position[i] += velocity[i] * h;
     }
 
-    // Stretch and seams together, a few times: once lets a hanging garment stretch several percent.
+    // Stretch and seams together, a few times: once lets a hanging garment stretch several percent. The panels share
+    // no particles, so each is solved on a thread of its own; seams join them, one after the other.
+    const int panels = static_cast<int>(m_ranges.size());
     for (int iteration = 0; iteration < qMax(1, m_settings.iterations); ++iteration)
     {
-        solveDistances(m_stretch, m_settings.stretchCompliance, h);
+        parallelFor(panels,
+                    [this, h](int p)
+                    {
+                        const Ranges &r = m_ranges.at(p);
+                        solveDistances(m_stretch, r.stretchBegin, r.stretchEnd, m_settings.stretchCompliance, h);
+                    });
         solveSeams(sewn);
     }
-    solveDistances(m_bend, m_settings.bendCompliance, h);
+    parallelFor(panels,
+                [this, h](int p)
+                {
+                    const Ranges &r = m_ranges.at(p);
+                    solveDistances(m_bend, r.bendBegin, r.bendEnd, m_settings.bendCompliance, h);
+                });
 
-    // However hard the constraints pull (a seam pulled through the body while the body pushes back), no particle
-    // moves farther in one step than the body collider reaches: the body always catches it.
-    for (int i = 0; i < m_position.size(); ++i)
-    {
-        const QVector3D moved = m_position.at(i) - m_previous.at(i);
-        const float distance = moved.length();
-        if (distance > maxStep)
-        {
-            m_position[i] = m_previous.at(i) + moved * (maxStep / distance);
-        }
-    }
-    collide();
-
-    for (int i = 0; i < m_position.size(); ++i)
-    {
-        if (m_inverseMass.at(i) > 0)
-        {
-            m_velocity[i] = (m_position.at(i) - m_previous.at(i)) / h;
-        }
-    }
+    // The body, and the velocities the step leaves: particle by particle, in runs side by side.
+    const int runs = chunks(count);
+    parallelFor(runs,
+                [this, count, runs, h](int run)
+                { collide(static_cast<int>(static_cast<qint64>(count) * run / runs),
+                          static_cast<int>(static_cast<qint64>(count) * (run + 1) / runs), h); });
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void ClothSimulator::solveDistances(const QVector<Distance> &constraints, float compliance, float h)
+void ClothSimulator::solveDistances(const QVector<Distance> &constraints, int begin, int end, float compliance,
+                                    float h)
 {
     const float alpha = compliance / (h * h);
-    for (const Distance &constraint : constraints)
+    QVector3D *position = m_position.data();
+    const float *inverseMass = m_inverseMass.constData();
+    const Distance *constraint = constraints.constData();
+    for (int k = begin; k < end; ++k)
     {
-        const float wa = m_inverseMass.at(constraint.a);
-        const float wb = m_inverseMass.at(constraint.b);
-        const QVector3D d = m_position.at(constraint.a) - m_position.at(constraint.b);
+        const Distance &c = constraint[k];
+        const float wa = inverseMass[c.a];
+        const float wb = inverseMass[c.b];
+        const QVector3D d = position[c.a] - position[c.b];
         const float length = d.length();
         if (length < 1e-9f)
         {
             continue;
         }
-        const float lambda = -(length - constraint.rest) / (wa + wb + alpha);
+        const float lambda = -(length - c.rest) / (wa + wb + alpha);
         const QVector3D correction = d * (lambda / length);
-        m_position[constraint.a] += correction * wa;
-        m_position[constraint.b] -= correction * wb;
+        position[c.a] += correction * wa;
+        position[c.b] -= correction * wb;
     }
 }
 
@@ -665,17 +735,30 @@ void ClothSimulator::solveSeams(float sewn)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void ClothSimulator::collide()
+void ClothSimulator::collide(int begin, int end, float h)
 {
     const float thickness = m_settings.thickness;
     const float friction = qBound(0.0f, m_settings.friction, 1.0f);
-    for (int i = 0; i < m_position.size(); ++i)
+    QVector3D *position = m_position.data();
+    const QVector3D *previous = m_previous.constData();
+    QVector3D *velocity = m_velocity.data();
+    const float *inverseMass = m_inverseMass.constData();
+    for (int i = begin; i < end; ++i)
     {
-        if (m_inverseMass.at(i) <= 0)
+        if (inverseMass[i] <= 0)
         {
             continue;
         }
-        QVector3D &p = m_position[i];
+        QVector3D &p = position[i];
+
+        // However hard the constraints pull (a seam pulled through the body while the body pushes back), no particle
+        // moves farther in one step than the body collider reaches: the body always catches it.
+        const QVector3D step = p - previous[i];
+        const float distance = step.length();
+        if (distance > maxStep)
+        {
+            p = previous[i] + step * (maxStep / distance);
+        }
 
         QVector3D surface;
         QVector3D normal;
@@ -698,9 +781,11 @@ void ClothSimulator::collide()
         if (touched && friction > 0)
         {
             // Friction: take back part of the sliding along the surface during this step.
-            const QVector3D moved = p - m_previous.at(i);
+            const QVector3D moved = p - previous[i];
             p -= (moved - normal * QVector3D::dotProduct(moved, normal)) * friction;
         }
+
+        velocity[i] = (p - previous[i]) / h;
     }
 }
 

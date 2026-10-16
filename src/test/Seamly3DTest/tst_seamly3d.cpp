@@ -232,6 +232,11 @@ private slots:
 
     void garmentPanelEdges();
     void seamFinderSewsBodice();
+    void seamFinderSewsTrousers();
+    void seamFinderSewsSkirt();
+    void arrangementWrapsLegs();
+    void bodyFrameFindsLegs();
+    void clothHoldsSkirtAtWaist();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
     void seamFinderSewsDart();
@@ -1355,6 +1360,12 @@ void TST_Seamly3D::arrangementGuess_data()
     QTest::newRow("sleeve") << "Sleeve" << static_cast<int>(PiecePlacement::LeftSleeve);
     QTest::newRow("german back") << "Rückenteil" << static_cast<int>(PiecePlacement::Back);
     QTest::newRow("collar") << "Collar" << static_cast<int>(PiecePlacement::Aside);
+    QTest::newRow("trouser front") << "Trouser front" << static_cast<int>(PiecePlacement::LeftLegFront);
+    QTest::newRow("pants back") << "Pants back" << static_cast<int>(PiecePlacement::LeftLegBack);
+    QTest::newRow("german trousers") << "Hose Vorderteil" << static_cast<int>(PiecePlacement::LeftLegFront);
+    QTest::newRow("skirt front") << "Skirt front" << static_cast<int>(PiecePlacement::LowerFront);
+    QTest::newRow("skirt back") << "Skirt back" << static_cast<int>(PiecePlacement::LowerBack);
+    QTest::newRow("waistband") << "Skirt waistband" << static_cast<int>(PiecePlacement::Aside);
     QTest::newRow("unknown") << "Piece 7" << static_cast<int>(PiecePlacement::Aside);
 }
 
@@ -1566,6 +1577,57 @@ PatternPiece tshirtSleeve(quint32 id)
     outline << QPointF(32, 32);
     piece.corners << static_cast<int>(outline.size());
     outline << QPointF(2, 32);
+    return piece;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief A trouser piece for the left leg, cut twice: waist at the top (78 cm round with the other pieces), the
+ * crease at x = 0, the crotch extension on the left (wider on the back). Corners: center at the waist, side at the
+ * waist, side at the hem, inside at the hem, crotch point.
+ */
+PatternPiece trouserPiece(quint32 id, const QString &name, bool back)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = name;
+    piece.quantity = 2;
+    QPolygonF &o = piece.seamLine;
+    const double center = back ? -9.5 : -9.9;
+    const double crotch = back ? -20.5 : -16.1;
+    const double side = back ? 16.5 : 16.1;
+    piece.corners << static_cast<int>(o.size());
+    o << QPointF(back ? -7 : -8.9, back ? -3 : 0);
+    piece.corners << static_cast<int>(o.size());
+    o << QPointF(back ? 13.0 : 10.1, 0);
+    o << QPointF(side, 18) << QPointF(side, 26) << QPointF(back ? 12 : 11, 60);
+    piece.corners << static_cast<int>(o.size());
+    o << QPointF(back ? 11 : 10, 100);
+    piece.corners << static_cast<int>(o.size());
+    o << QPointF(back ? -11 : -10, 100) << QPointF(back ? -12 : -11, 60);
+    piece.corners << static_cast<int>(o.size());
+    o << QPointF(crotch, 26);
+    for (int i = 1; i < 8; ++i)
+    {
+        const double a = M_PI / 2 * i / 8;
+        o << QPointF(crotch + (center - crotch) * std::sin(a), 18 + 8 * std::cos(a));
+    }
+    o << QPointF(center, 18);
+    return piece;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Half a straight skirt cut on the fold, @p length long: 78 cm round the waist, 104 round the hips. */
+PatternPiece skirtPiece(quint32 id, const QString &name, double length = 60)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = name;
+    piece.onFold = true;
+    QPolygonF &o = piece.seamLine;
+    piece.corners << 0 << 1 << 3 << 4;
+    o << QPointF(0, 0) << QPointF(19.5, 0) << QPointF(26, 20) << QPointF(26 + 6 * (length - 20) / 40, length)
+      << QPointF(0, length);
     return piece;
 }
 
@@ -1797,6 +1859,211 @@ void TST_Seamly3D::seamLinesFollowEdges()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsTrousers()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {trouserPiece(1, QStringLiteral("Trouser front"), false),
+                          trouserPiece(2, QStringLiteral("Trouser back"), true)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 4); // both legs, front and back
+    for (const GarmentPanel &panel : panels)
+    {
+        QCOMPARE(panel.edgeCount(), 5);
+    }
+
+    // Outseams and inseams on each leg, the center front and center back; waists and hems stay open.
+    enum TrouserEdge
+    {
+        Waist,
+        Outseam,
+        Hem,
+        Inseam,
+        Crotch
+    };
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    QCOMPARE(seams.size(), 6);
+    int outseams = 0;
+    int inseams = 0;
+    int crotch = 0;
+    for (const Seam &seam : seams)
+    {
+        QCOMPARE(seam.edgeA, seam.edgeB);
+        QVERIFY(!seam.reversed);
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        switch (seam.edgeA)
+        {
+            case Outseam:
+            case Inseam:
+                (seam.edgeA == Outseam ? outseams : inseams)++;
+                QVERIFY(a.pieceId != b.pieceId); // front to back, on the same leg
+                QCOMPARE(a.copy, b.copy);
+                break;
+            case Crotch:
+                ++crotch;
+                QCOMPARE(a.pieceId, b.pieceId); // left to right
+                QVERIFY(a.copy != b.copy);
+                break;
+            default:
+                QFAIL(qPrintable(QStringLiteral("edge %1 should not be sewn").arg(seam.edgeA)));
+        }
+    }
+    QCOMPARE(outseams, 2);
+    QCOMPARE(inseams, 2);
+    QCOMPARE(crotch, 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsSkirt()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {skirtPiece(1, QStringLiteral("Skirt front")), skirtPiece(2, QStringLiteral("Skirt back"))};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 4);
+
+    // The folds and the side seams, which both curve out over the hips. The waist edges meet at the sides, but a
+    // waistline is never sewn.
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    QCOMPARE(seams.size(), 4);
+    for (const Seam &seam : seams)
+    {
+        QCOMPARE(seam.edgeA, seam.edgeB);
+        QVERIFY2(seam.edgeA == 1 || seam.edgeA == 3, qPrintable(QString::number(seam.edgeA)));
+        if (seam.edgeA == 3)
+        {
+            QCOMPARE(panels.at(seam.panelA).pieceId, panels.at(seam.panelB).pieceId); // the fold
+        }
+        else
+        {
+            QVERIFY(panels.at(seam.panelA).pieceId != panels.at(seam.panelB).pieceId); // front to back
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementWrapsLegs()
+{
+    const PatternPiece front = trouserPiece(1, QStringLiteral("Trouser front"), false);
+    QVector<int> outlineVertex;
+    const Mesh flat = PieceMesher::mesh(front.seamLine, 2.5, &outlineVertex);
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+    const QVector<Mesh> placed =
+        PieceArrangement::place(flat, front.seamLine.boundingRect(), PiecePlacement::LeftLegFront, true, false, frame);
+    QCOMPARE(placed.size(), 2);
+
+    // Bending only: the hem keeps its length.
+    const auto at = [&outlineVertex](const Mesh &mesh, int corner)
+    { return mesh.positions.at(outlineVertex.at(corner)); };
+    const int hemSide = front.corners.at(2);
+    const int hemInside = front.corners.at(3);
+    const Mesh &left = placed.at(0);
+    const Mesh &right = placed.at(1);
+
+    // The waist at the top, the hem near the floor; the side seam outside the left leg, the crotch near the middle.
+    QVERIFY(qAbs(at(left, 0).y() - (frame.waistHeight + 2)) < 0.01f);
+    QVERIFY(at(left, hemSide).y() < 10);
+    QVERIFY(at(left, 1).x() > frame.hipRadius * 0.7f);
+    QVERIFY(at(left, hemSide).x() > frame.leftKnee.x());
+    QVERIFY(at(left, hemInside).x() < frame.leftKnee.x());
+    const int crotchPoint = front.corners.at(4);
+    QVERIFY(at(left, crotchPoint).x() >= 0.3f - 1e-4f && at(left, crotchPoint).x() < 3);
+    QVERIFY(at(left, 0).z() > frame.hipRadius * 0.8f); // the center front, in front
+
+    // Every point of the left leg stays left of the center; the mirrored copy is the right leg.
+    for (int v = 0; v < left.positions.size(); ++v)
+    {
+        QVERIFY(left.positions.at(v).x() > 0);
+        QVERIFY(qAbs(right.positions.at(v).x() + left.positions.at(v).x()) < 1e-4f);
+        QVERIFY(qAbs(right.positions.at(v).z() - left.positions.at(v).z()) < 1e-4f);
+    }
+
+    // The back goes behind.
+    const QVector<Mesh> back =
+        PieceArrangement::place(flat, front.seamLine.boundingRect(), PiecePlacement::LeftLegBack, false, false, frame);
+    QCOMPARE(back.size(), 1);
+    QVERIFY(at(back.at(0), 0).z() < -frame.hipRadius * 0.8f);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::bodyFrameFindsLegs()
+{
+    const BodyMeasurements measurements;
+    const MakeHumanFit fit = MakeHumanFitter::fit(measurements);
+    QVERIFY(fit.valid);
+    const BodyFrame guessed = BodyFrame::fromMeasurements(measurements);
+    const BodyFrame frame = guessed.withLegs(fit.mesh);
+
+    // The left leg of the body: its axis left of the center, its girths near the measurements.
+    QVERIFY2(frame.leftHip.x() > 4 && frame.leftHip.x() < 16, qPrintable(QString::number(frame.leftHip.x())));
+    QVERIFY(frame.leftKnee.x() > 4 && frame.leftKnee.x() < 20);
+    QVERIFY(qAbs(frame.leftHip.y() - frame.crotchHeight) < 1e-3f);
+    const auto girth = [&measurements](BodyMeasurement m) { return measurements.value(m) / (2 * M_PI); };
+    QVERIFY2(qAbs(frame.kneeRadius - girth(BodyMeasurement::KneeCirc)) < 1.5,
+             qPrintable(QStringLiteral("%1 %2").arg(frame.kneeRadius).arg(girth(BodyMeasurement::KneeCirc))));
+    QVERIFY(frame.thighRadius > frame.kneeRadius);
+    QVERIFY((frame.legAxis(frame.kneeHeight) - frame.leftKnee).length() < 1e-3f);
+    QVERIFY(frame.legRadius(frame.ankleHeight) < frame.legRadius(frame.kneeHeight));
+
+    // Nothing to cut: the frame stays as it was.
+    QCOMPARE(guessed.withLegs(Mesh()).leftHip, guessed.leftHip);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothHoldsSkirtAtWaist()
+{
+    // A skirt hangs from the waist: its waistline, 78 cm round, cannot slip over hips 99.5 cm round. That takes the
+    // waistline's tension, which the solver builds slowly: it used to stretch and slide down.
+    const BodyMeasurements measurements;
+    const MakeHumanFit fit = MakeHumanFitter::fit(measurements);
+    QVERIFY(fit.valid);
+
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {skirtPiece(1, QStringLiteral("Skirt front"), 40),
+                          skirtPiece(2, QStringLiteral("Skirt back"), 40)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(measurements));
+    ClothSimulator simulator;
+    simulator.setBody(fit.mesh);
+    simulator.setGarment(panels, SeamFinder::find(panels));
+    QCOMPARE(simulator.seamCount(), 4);
+    for (int frame = 0; frame < 90; ++frame)
+    {
+        simulator.step();
+    }
+    QVERIFY(simulator.isSewn());
+
+    float waist = 0;
+    float flat = 0;
+    float height = 0;
+    int count = 0;
+    for (const GarmentPanel &panel : simulator.panels())
+    {
+        const QVector<int> vertices = panel.edgeVertices(0);
+        for (int i = 0; i < vertices.size(); ++i)
+        {
+            height += panel.shape.positions.at(vertices.at(i)).y();
+            ++count;
+            if (i > 0)
+            {
+                const auto segment = [&vertices, i](const Mesh &mesh)
+                { return (mesh.positions.at(vertices.at(i)) - mesh.positions.at(vertices.at(i - 1))).length(); };
+                waist += segment(panel.shape);
+                flat += segment(panel.rest);
+            }
+        }
+    }
+    height /= static_cast<float>(count);
+    const auto hips = static_cast<float>(measurements.value(BodyMeasurement::HipHeight));
+    QVERIFY2(height > hips + 8, qPrintable(QStringLiteral("waistline at %1, hips at %2").arg(height).arg(hips)));
+    QVERIFY2(waist < flat * 1.08f, qPrintable(QStringLiteral("waistline %1 cm, %2 flat").arg(waist).arg(flat)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void TST_Seamly3D::seamFinderSewsDart()
 {
     // A skirt panel with a waist dart: two 10 cm legs meeting at a sharp point.
@@ -1919,14 +2186,14 @@ void TST_Seamly3D::clothSewsTube()
     }
 
     const QVector<Seam> seams = SeamFinder::find({front, back});
-    QCOMPARE(seams.size(), 3); // both sides and the top; the bottom is the hem
+    QCOMPARE(seams.size(), 2); // both sides; the top is a waistline and the bottom the hem
 
     ClothSettings settings;
     settings.gravity = 0;
     ClothSimulator simulator;
     simulator.setSettings(settings);
     simulator.setGarment({front, back}, seams);
-    QCOMPARE(simulator.seamCount(), 3);
+    QCOMPARE(simulator.seamCount(), 2);
     QVERIFY(simulator.maxSeamGap() > 9.0f);
     QVERIFY(!simulator.isSewn());
     for (int frame = 0; frame < 30 && !simulator.isSewn(); ++frame)

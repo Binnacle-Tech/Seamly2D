@@ -175,6 +175,8 @@ BodyFrame Workspace3DWindow::bodyFrame() const
         // Sleeves follow the arm of the body shown: its pose depends on the body.
         frame = bodyKind() == BodyKind::Realistic && m_fit.valid ? frame.withArm(m_fit.leftShoulder, m_fit.leftWrist)
                                                                   : frame.withArm(m_body.leftShoulder, m_body.leftWrist);
+        // Trouser legs follow the legs of the body shown.
+        frame = frame.withLegs(m_viewport->mesh());
     }
     return frame;
 }
@@ -266,7 +268,8 @@ void Workspace3DWindow::setSimulationRunning(bool run)
         if (!sewable)
         {
             m_piecesPanel->setSimulationRunning(false);
-            m_piecesPanel->setSimulationStatus(tr("Place some pieces on the body first (front, back, sides, sleeves)."));
+            m_piecesPanel->setSimulationStatus(
+                tr("Place some pieces on the body first (front, back, sides, sleeves, legs)."));
             return;
         }
 
