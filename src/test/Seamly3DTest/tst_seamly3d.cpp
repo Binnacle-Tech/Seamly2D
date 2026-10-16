@@ -28,7 +28,9 @@
 #include <QDate>
 #include <QDoubleSpinBox>
 #include <QElapsedTimer>
+#include <QPushButton>
 #include <QSignalSpy>
+#include <QTreeWidget>
 #include <QVector2D>
 #include <QDomDocument>
 #include <QProcess>
@@ -230,7 +232,10 @@ private slots:
 
     void garmentPanelEdges();
     void seamFinderSewsBodice();
+    void seamEditorSwitchesAndAdds();
+    void seamLinesFollowEdges();
     void seamFinderSewsDart();
+    void piecesHaveSides();
     void seamFinderSetsInSleeves();
     void bodyColliderInsideOutside();
     void clothDrapesOverSphere();
@@ -1507,18 +1512,6 @@ Mesh sphereMesh(const QVector3D &center, float radius, int rings = 24, int segme
     return mesh;
 }
 
-//---------------------------------------------------------------------------------------------------------------------
-/** @brief The bodice of bodicePiece() with its corners: neck, shoulder, armhole, side, hem, center. */
-PatternPiece bodiceWithCorners(quint32 id, const QString &name)
-{
-    PatternPiece piece;
-    piece.id = id;
-    piece.name = name;
-    piece.seamLine = bodicePiece();
-    piece.corners = {0, 1, 2, 11, 12, 13};
-    piece.onFold = true;
-    return piece;
-}
 
 //---------------------------------------------------------------------------------------------------------------------
 /** @brief Half of a T-shirt front or back, center line at x = 0, with a concave neckline and armhole. Edges: neck,
@@ -1616,7 +1609,7 @@ void TST_Seamly3D::garmentPanelEdges()
 void TST_Seamly3D::seamFinderSewsBodice()
 {
     auto provider = std::make_shared<FakeProvider>();
-    provider->m_pieces = {bodiceWithCorners(1, QStringLiteral("Front")), bodiceWithCorners(2, QStringLiteral("Back"))};
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2)};
     PatternPiecesPanel piecesPanel;
     piecesPanel.setProvider(provider);
 
@@ -1661,6 +1654,146 @@ void TST_Seamly3D::seamFinderSewsBodice()
     QCOMPARE(folds, 2);
     QCOMPARE(sides, 2);
     QCOMPARE(shoulders, 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamEditorSwitchesAndAdds()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    piecesPanel.updateSeams(panels);
+    QCOMPARE(piecesPanel.foundSeams().size(), 6);
+
+    QVector<QColor> colors;
+    QCOMPARE(piecesPanel.seams(panels, &colors).size(), 6);
+    QCOMPARE(colors.size(), 6);
+
+    auto *list = piecesPanel.findChild<QTreeWidget *>(QStringLiteral("seamList"));
+    QVERIFY(list != nullptr);
+    QCOMPARE(list->topLevelItemCount(), 6);
+    QSignalSpy changed(&piecesPanel, &PatternPiecesPanel::seamsChanged);
+
+    // Unchecking a seam leaves it open.
+    list->topLevelItem(0)->setCheckState(0, Qt::Unchecked);
+    QCOMPARE(changed.count(), 1);
+    QCOMPARE(piecesPanel.seams(panels).size(), 5);
+
+    // Switched off seams stay off when the pieces move, until the seams are found again.
+    piecesPanel.updateSeams(panels);
+    QCOMPARE(piecesPanel.seams(panels).size(), 5);
+    QCOMPARE(list->topLevelItem(0)->checkState(0), Qt::Unchecked);
+
+    QPushButton *find = nullptr;
+    QPushButton *remove = nullptr;
+    for (QPushButton *button : piecesPanel.findChildren<QPushButton *>())
+    {
+        if (button->text() == QStringLiteral("Find Seams"))
+        {
+            find = button;
+        }
+        else if (button->text() == QStringLiteral("Remove"))
+        {
+            remove = button;
+        }
+    }
+    QVERIFY(find != nullptr && remove != nullptr);
+    find->click();
+    QCOMPARE(piecesPanel.seams(panels).size(), 6);
+
+    // The two necklines, sewn by hand.
+    PatternPiecesPanel::SeamSpec neck;
+    neck.pieceA = 1;
+    neck.edgeA = Neck;
+    neck.pieceB = 2;
+    neck.edgeB = Neck;
+    piecesPanel.addSeam(neck);
+    QCOMPARE(list->topLevelItemCount(), 7);
+    const QVector<Seam> withNeck = piecesPanel.seams(panels);
+    QCOMPARE(withNeck.size(), 7);
+    QCOMPARE(withNeck.constLast().edgeA, static_cast<int>(Neck));
+    QCOMPARE(panels.at(withNeck.constLast().panelA).pieceId, quint32(1));
+    QCOMPARE(panels.at(withNeck.constLast().panelB).pieceId, quint32(2));
+
+    // Selecting a seam highlights both its edges.
+    list->setCurrentItem(list->topLevelItem(6));
+    QCOMPARE(piecesPanel.highlightedEdges().size(), 2);
+    QCOMPARE(piecesPanel.highlightedEdges().constFirst().second, static_cast<int>(Neck));
+
+    // Removing an added seam deletes it; removing a found one switches it off.
+    remove->click();
+    QCOMPARE(list->topLevelItemCount(), 6);
+    QCOMPARE(piecesPanel.seams(panels).size(), 6);
+    list->setCurrentItem(list->topLevelItem(2));
+    remove->click();
+    QCOMPARE(list->topLevelItemCount(), 6);
+    QCOMPARE(piecesPanel.seams(panels).size(), 5);
+
+    // An edge that no longer exists is skipped rather than sewn.
+    PatternPiecesPanel::SeamSpec gone = neck;
+    gone.edgeA = 40;
+    piecesPanel.addSeam(gone);
+    QCOMPARE(piecesPanel.seams(panels).size(), 5);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamLinesFollowEdges()
+{
+    GarmentPanel a = rectanglePanel(20, 40);
+    GarmentPanel b = rectanglePanel(20, 40);
+    for (QVector3D &position : b.shape.positions)
+    {
+        position += QVector3D(0, 0, 10); // a parallel copy, 10 cm away
+    }
+    QCOMPARE(a.edgeCount(), 4);
+
+    // A whole edge: from one corner to the next, in order.
+    const QVector<int> edge = a.edgeVertices(1);
+    const Viewport3D::LineSet line = PatternPiecesPanel::edgeLine(a, 1, Qt::red, 3.0f);
+    QCOMPARE(line.color, QColor(Qt::red));
+    QCOMPARE(line.segments.size(), 2 * (edge.size() - 1));
+    QVERIFY((line.segments.constFirst() - a.shape.positions.at(edge.constFirst())).length() < 1e-4f);
+    QVERIFY((line.segments.constLast() - a.shape.positions.at(edge.constLast())).length() < 1e-4f);
+
+    // Part of an edge: the middle half of the 40 cm side.
+    const Viewport3D::LineSet part = PatternPiecesPanel::edgeLine(a, 1, Qt::red, 3.0f, 0.25, 0.75);
+    float length = 0;
+    for (int i = 0; i + 1 < part.segments.size(); i += 2)
+    {
+        length += (part.segments.at(i + 1) - part.segments.at(i)).length();
+    }
+    QVERIFY2(qAbs(length - 20.0f) < 0.01f, qPrintable(QString::number(static_cast<double>(length))));
+    QVERIFY((part.segments.constFirst() - QVector3D(20, 10, 0)).length() < 1e-3f);
+
+    // A seam is both edges plus ties between the points that meet.
+    Seam seam;
+    seam.panelA = 0;
+    seam.edgeA = 1;
+    seam.panelB = 1;
+    seam.edgeB = 1;
+    const QVector<Viewport3D::LineSet> lines = PatternPiecesPanel::seamLines({a, b}, {seam}, {Qt::green});
+    QCOMPARE(lines.size(), 3);
+    for (const Viewport3D::LineSet &set : lines)
+    {
+        QCOMPARE(set.color, QColor(Qt::green));
+    }
+    const Viewport3D::LineSet &ties = lines.at(2);
+    QCOMPARE(ties.segments.size(), 10);
+    for (int i = 0; i < ties.segments.size(); i += 2)
+    {
+        QVERIFY(qAbs((ties.segments.at(i + 1) - ties.segments.at(i)).length() - 10.0f) < 1e-3f);
+    }
+
+    // Sewn the other way round, the ties cross.
+    seam.reversed = true;
+    const QVector<Viewport3D::LineSet> crossed = PatternPiecesPanel::seamLines({a, b}, {seam}, {Qt::green});
+    QVERIFY((crossed.at(2).segments.at(0) - crossed.at(2).segments.at(1)).length() > 40.0f);
+
+    // A seam on a missing panel draws nothing.
+    seam.panelB = 5;
+    QVERIFY(PatternPiecesPanel::seamLines({a, b}, {seam}, {}).isEmpty());
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2811,6 +2944,39 @@ void TST_Seamly3D::fitMapColors()
     QCOMPARE(legend.size(), QSize(100, 8));
     QVERIFY(QColor(legend.pixel(0, 4)).red() > 200);
     QVERIFY(QColor(legend.pixel(99, 4)).blue() > 200);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::piecesHaveSides()
+{
+    // A side seam with a point at the waist (a slight bend) and a notch, and a hem running straight into a curve:
+    // the points along them do not split them. Real corners do.
+    QPolygonF outline;
+    QVector<int> corners;
+    corners << static_cast<int>(outline.size());
+    outline << QPointF(0, 0);                        // top left: corner
+    corners << static_cast<int>(outline.size());
+    outline << QPointF(20, 0);                       // top right: corner
+    corners << static_cast<int>(outline.size());
+    outline << QPointF(21, 20);                      // waist: a 3 degree bend
+    corners << static_cast<int>(outline.size());
+    outline << QPointF(22, 30);                      // notch on the side seam
+    corners << static_cast<int>(outline.size());
+    outline << QPointF(23, 40);                      // bottom right: corner
+    corners << static_cast<int>(outline.size());
+    outline << QPointF(8, 40);                       // the hem runs into a curve here, smoothly
+    for (int i = 1; i <= 16; ++i)
+    {
+        const double a = M_PI / 2 * i / 16;
+        outline << QPointF(8 - 8 * std::sin(a), 40 - 8 * (1 - std::cos(a)));
+    }
+    // ends at (0, 32), going up: then straight up the left side to the start
+
+    const QVector<int> sides = PieceMesher::sides(outline, corners);
+    QCOMPARE(sides, QVector<int>({0, 1, 4}));
+    QVERIFY(PieceMesher::turningAngle(outline, 0, 1.0) > 80);
+    QVERIFY(PieceMesher::turningAngle(outline, 2, 1.0) < 5);
+    QVERIFY(PieceMesher::turningAngle(outline, 5, 1.0) < 10); // the curve leaves along the hem
 }
 
 QTEST_MAIN(TST_Seamly3D)

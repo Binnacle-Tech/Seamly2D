@@ -161,16 +161,27 @@ and draping:
 **Sew & Drape** in the Pattern Pieces tab sews the pieces placed on the body
 together and lets the garment fall onto it. **Reset** goes back to the pieces
 around the body; changing the pieces, their places or the body resets too.
-The status line says how sewing goes; its tooltip lists the seams found.
+The status line says how sewing goes; its tooltip lists the seams sewn.
 
-* **Seams are found automatically.** A piece's edges run between its own
-  points (the points of its main path). Two edges are sewn together when they
+* **Seams are found automatically.** A piece's edges are its sides: they run
+  between the points where its outline turns sharply (more than 25 degrees),
+  so notches and points along a smooth curve do not split them. Two edges are sewn together when they
   are as long as each other (within 5%), have the same shape (one bulges where
   the other curves in, or both are straight), and lie side by side on the same
   side of the body once arranged: side and shoulder seams, the center line of
   a piece cut on the fold and its mirrored copy, the underarm seam of a
   sleeve, darts. A sleeve cap is set into the front and back armholes beside
   it, with up to 15% ease. Necklines and hems stay open.
+* **Seams list:** every seam, with its color. Uncheck a seam to leave it open;
+  **Add Seam...** sews two edges you pick (each listed with its length, and
+  shown in yellow in 3D while you choose; the ends that meet are chosen from
+  where they lie, and can be swapped); **Remove** deletes a seam you added or
+  switches off one that was found; **Find Seams** sews every seam found again.
+  Seams you switch off or add are kept when the pieces move. Changing the
+  seams sews and drapes again.
+* **Show seams** draws each seam in 3D as its two edges in its color, with
+  ties between the points that meet, on the pieces as arranged and on the
+  cloth as it drapes. Selecting a seam in the list shows its edges in yellow.
 * **Simulation:** position based dynamics (XPBD) in small steps, 10 per frame,
   each passing four times over the stretch and seam constraints. Woven
   fabrics keep the lengths of the flat piece; knits stretch. Seams pull their
@@ -192,8 +203,8 @@ The status line says how sewing goes; its tooltip lists the seams found.
     more away.
 
 Not there yet: collars and waistbands sewn to necklines (pieces hung beside
-the body are not sewn), self collision (cloth folding through itself), fabric
-presets, and editing the seams by hand.
+the body are not sewn), self collision (cloth folding through itself), a
+fabric per piece, and picking seam edges in 3D or on the 2D pieces.
 
 ### Importing SVG and DXF patterns
 
@@ -299,7 +310,9 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 3. **Sewing**
    - [x] Seams found automatically between piece edges: one to one (sides,
      shoulders, folds, darts, underarms) and sleeve caps into armholes
-   - [ ] Edit seams by hand, drawn on the 2D pieces, with notches as
+   - [x] Seams list: switch seams off, add seams between two edges, seam
+     lines drawn in 3D
+   - [ ] Pick seam edges in 3D or on the 2D pieces, with notches as
      alignment hints; collars and waistbands
 4. **Cloth simulation**
    - [x] Even triangle mesh of each piece (Delaunay flips, longest edge

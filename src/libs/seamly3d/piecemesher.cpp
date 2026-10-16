@@ -30,6 +30,7 @@
 #include <QLineF>
 #include <QtMath>
 
+#include <algorithm>
 #include <functional>
 
 #include "polygontriangulator.h"
@@ -311,6 +312,83 @@ Mesh PieceMesher::mesh(const QPolygonF &outline, double maxEdge, QVector<int> *o
     }
 
     return mesh;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double PieceMesher::turningAngle(const QPolygonF &outline, int index, double window)
+{
+    QPolygonF points = outline;
+    if (points.size() > 1 && points.constFirst() == points.constLast())
+    {
+        points.removeLast();
+    }
+    const int n = static_cast<int>(points.size());
+    if (n < 3 || index < 0 || index >= n)
+    {
+        return 0;
+    }
+    const QPointF at = points.at(index);
+    // Walk along the outline, both ways, until the window's length is covered.
+    const auto reach = [&points, n, index, &at, window](int step)
+    {
+        double walked = 0;
+        int i = index;
+        QPointF previous = at;
+        for (int k = 0; k < n - 1; ++k)
+        {
+            i = ((i + step) % n + n) % n;
+            const QPointF p = points.at(i);
+            const double segment = QLineF(previous, p).length();
+            if (walked + segment >= window)
+            {
+                return segment > 0 ? previous + (p - previous) * ((window - walked) / segment) : p;
+            }
+            walked += segment;
+            previous = p;
+        }
+        return previous;
+    };
+    const QPointF before = reach(-1);
+    const QPointF after = reach(1);
+    const QLineF in(before, at);
+    const QLineF out(at, after);
+    if (in.length() < 1e-9 || out.length() < 1e-9)
+    {
+        return 0;
+    }
+    double angle = qAbs(in.angleTo(out));
+    if (angle > 180)
+    {
+        angle = 360 - angle;
+    }
+    return angle;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<int> PieceMesher::sides(const QPolygonF &outline, const QVector<int> &corners, double minAngle, double window)
+{
+    QVector<int> result;
+    int sharpest = -1;
+    double sharpestAngle = -1;
+    for (const int corner : corners)
+    {
+        const double angle = turningAngle(outline, corner, window);
+        if (angle > minAngle)
+        {
+            result.append(corner);
+        }
+        if (angle > sharpestAngle)
+        {
+            sharpestAngle = angle;
+            sharpest = corner;
+        }
+    }
+    if (result.isEmpty() && sharpest >= 0)
+    {
+        result.append(sharpest);
+    }
+    std::sort(result.begin(), result.end());
+    return result;
 }
 
 } // namespace Seamly3D

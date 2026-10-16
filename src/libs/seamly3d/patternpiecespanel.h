@@ -28,6 +28,7 @@
 #define SEAMLY3D_PATTERNPIECESPANEL_H
 
 #include <QHash>
+#include <QSet>
 #include <QVector>
 #include <QWidget>
 
@@ -99,12 +100,50 @@ public:
     FitMap::Kind fitMap() const;
     void         setFitMap(FitMap::Kind kind);
 
+    /** @brief A seam between two edges, named by piece, copy (0, or 1 for the mirrored copy) and edge number. */
+    struct SeamSpec
+    {
+        quint32 pieceA{0};
+        int     copyA{0};
+        int     edgeA{0};
+        quint32 pieceB{0};
+        int     copyB{0};
+        int     edgeB{0};
+        bool    reversed{false};
+        double  startA{0.0};
+        double  endA{1.0};
+        bool    added{false}; ///< added by hand; otherwise found automatically
+
+        QString key() const;
+    };
+
+    /**
+     * @brief updateSeams finds the seams of the garment as placed in @p panels (from panels()). Seams switched off
+     * stay off, seams added by hand stay.
+     */
+    void         updateSeams(const QVector<GarmentPanel> &panels);
+    /** @brief The seams to sew between @p panels, and the color each is drawn in. */
+    QVector<Seam> seams(const QVector<GarmentPanel> &panels, QVector<QColor> *colors = nullptr) const;
+    void         addSeam(const SeamSpec &spec);
+    QVector<SeamSpec> foundSeams() const;
+    bool         showSeams() const;
+    /** @brief Edges to show highlighted (panel and edge numbers in the panels of the last updateSeams()). */
+    QVector<QPair<int, int>> highlightedEdges() const;
+
+    /** @brief The lines showing @p seams on @p panels: both edges, and ties between the points that meet. */
+    static QVector<Viewport3D::LineSet> seamLines(const QVector<GarmentPanel> &panels, const QVector<Seam> &seams,
+                                                  const QVector<QColor> &colors);
+    static Viewport3D::LineSet edgeLine(const GarmentPanel &panel, int edge, const QColor &color, float width,
+                                        double from = 0.0, double to = 1.0);
+
 signals:
     void arrangementChanged();
     void useMeasurementsRequested();
     void simulationToggled(bool run);
     void simulationResetRequested();
     void fabricChanged();
+    void seamsChanged();
+    void highlightChanged();
     void fitMapChanged();
 
 public slots:
@@ -114,6 +153,10 @@ private:
     Q_DISABLE_COPY_MOVE(PatternPiecesPanel)
 
     void rebuildList();
+    void rebuildSeamList();
+    void addSeamDialog();
+    int  panelIndex(quint32 piece, int copy) const;
+    QString edgeName(int panel, int edge) const;
     /** @brief A piece's flat mesh: its first outlineCount vertices are its outline, corners among them. */
     struct FlatPiece
     {
@@ -142,6 +185,17 @@ private:
     QLabel      *m_legendBar;
     QLabel      *m_legendLow;
     QLabel      *m_legendHigh;
+    QTreeWidget *m_seamList;
+    QPushButton *m_findSeamsButton;
+    QPushButton *m_addSeamButton;
+    QPushButton *m_removeSeamButton;
+    QCheckBox   *m_showSeamsCheck;
+    QVector<GarmentPanel>    m_seamPanels{};  ///< panels the seams were last found on
+    QVector<SeamSpec>        m_foundSeams{};
+    QVector<SeamSpec>        m_addedSeams{};
+    QSet<QString>            m_switchedOff{};
+    QVector<QPair<int, int>> m_highlight{};
+    bool                     m_updatingSeams{false};
     QTimer      *m_followTimer;
     bool         m_updatingList{false};
 };

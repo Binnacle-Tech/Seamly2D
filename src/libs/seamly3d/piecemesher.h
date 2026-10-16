@@ -73,6 +73,21 @@ public:
      * @param outlineIndex receives, for each point of @p outline, its index in the result (repeated points share one).
      */
     static QPolygonF resample(const QPolygonF &outline, double maxEdge, QVector<int> *outlineIndex = nullptr);
+
+    /**
+     * @brief turningAngle is how much the closed @p outline turns at its point @p index, in degrees: between the
+     * directions to the points @p window before and after it along the outline (so a dense outline's small steps
+     * along a curve do not count, a corner does).
+     */
+    static double turningAngle(const QPolygonF &outline, int index, double window);
+
+    /**
+     * @brief sides keeps the corners (indices in @p outline) where the outline turns more than @p minAngle: the
+     * points between two sides. Points along a side (a notch, where a line runs into a curve) are dropped. When none
+     * is sharp, the sharpest one stays.
+     */
+    static QVector<int> sides(const QPolygonF &outline, const QVector<int> &corners, double minAngle = 25.0,
+                              double window = 1.0);
 };
 
 } // namespace Seamly3D

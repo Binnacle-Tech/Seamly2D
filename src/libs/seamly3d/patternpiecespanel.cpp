@@ -27,6 +27,9 @@
 #include "patternpiecespanel.h"
 
 #include <QCheckBox>
+#include <QIcon>
+#include <QDialogButtonBox>
+#include <QDialog>
 #include <QPixmap>
 #include <QGridLayout>
 #include <QFormLayout>
@@ -83,6 +86,11 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     , m_legendBar(new QLabel(m_legend))
     , m_legendLow(new QLabel(m_legend))
     , m_legendHigh(new QLabel(m_legend))
+    , m_seamList(new QTreeWidget(this))
+    , m_findSeamsButton(new QPushButton(tr("Find Seams"), this))
+    , m_addSeamButton(new QPushButton(tr("Add Seam..."), this))
+    , m_removeSeamButton(new QPushButton(tr("Remove"), this))
+    , m_showSeamsCheck(new QCheckBox(tr("Show seams"), this))
     , m_followTimer(new QTimer(this))
 {
     auto *layout = new QVBoxLayout(this);
@@ -176,6 +184,90 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     legendLayout->addWidget(m_legendLow, 1, 0, Qt::AlignLeft);
     legendLayout->addWidget(m_legendHigh, 1, 1, Qt::AlignRight);
     m_legend->setVisible(false);
+
+    // Seams: found automatically, switched off, or added by hand.
+    layout->addWidget(new QLabel(tr("Seams:"), this));
+    m_seamList->setObjectName(QStringLiteral("seamList"));
+    m_seamList->setHeaderHidden(true);
+    m_seamList->setRootIsDecorated(false);
+    m_seamList->setMinimumHeight(90);
+    m_seamList->setToolTip(tr("Uncheck a seam to leave it open"));
+    layout->addWidget(m_seamList, 1);
+    connect(m_seamList, &QTreeWidget::itemChanged, this,
+            [this](QTreeWidgetItem *item)
+            {
+                if (m_updatingSeams)
+                {
+                    return;
+                }
+                const QString key = item->data(0, Qt::UserRole).toString();
+                if (item->checkState(0) == Qt::Checked)
+                {
+                    m_switchedOff.remove(key);
+                }
+                else
+                {
+                    m_switchedOff.insert(key);
+                }
+                emit seamsChanged();
+            });
+    connect(m_seamList, &QTreeWidget::currentItemChanged, this,
+            [this](QTreeWidgetItem *item)
+            {
+                m_highlight.clear();
+                if (item != nullptr)
+                {
+                    const QString key = item->data(0, Qt::UserRole).toString();
+                    for (const SeamSpec &spec : m_foundSeams + m_addedSeams)
+                    {
+                        if (spec.key() == key)
+                        {
+                            m_highlight << qMakePair(panelIndex(spec.pieceA, spec.copyA), spec.edgeA)
+                                        << qMakePair(panelIndex(spec.pieceB, spec.copyB), spec.edgeB);
+                        }
+                    }
+                }
+                emit highlightChanged();
+            });
+    m_findSeamsButton->setToolTip(tr("Sew every seam found again"));
+    connect(m_findSeamsButton, &QPushButton::clicked, this,
+            [this]()
+            {
+                m_switchedOff.clear();
+                rebuildSeamList();
+                emit seamsChanged();
+            });
+    m_addSeamButton->setToolTip(tr("Sew two edges together"));
+    connect(m_addSeamButton, &QPushButton::clicked, this, &PatternPiecesPanel::addSeamDialog);
+    m_removeSeamButton->setToolTip(tr("Remove the seam (one found automatically is switched off)"));
+    connect(m_removeSeamButton, &QPushButton::clicked, this,
+            [this]()
+            {
+                const QTreeWidgetItem *item = m_seamList->currentItem();
+                if (item == nullptr)
+                {
+                    return;
+                }
+                const QString key = item->data(0, Qt::UserRole).toString();
+                const auto before = m_addedSeams.size();
+                m_addedSeams.erase(std::remove_if(m_addedSeams.begin(), m_addedSeams.end(),
+                                                  [&key](const SeamSpec &spec) { return spec.key() == key; }),
+                                   m_addedSeams.end());
+                if (m_addedSeams.size() == before)
+                {
+                    m_switchedOff.insert(key);
+                }
+                rebuildSeamList();
+                emit seamsChanged();
+            });
+    m_showSeamsCheck->setChecked(true);
+    connect(m_showSeamsCheck, &QCheckBox::toggled, this, &PatternPiecesPanel::highlightChanged);
+    auto *seamButtons = new QHBoxLayout;
+    seamButtons->addWidget(m_findSeamsButton);
+    seamButtons->addWidget(m_addSeamButton);
+    seamButtons->addWidget(m_removeSeamButton);
+    layout->addLayout(seamButtons);
+    layout->addWidget(m_showSeamsCheck);
 
     auto *fabricForm = new QFormLayout;
     fabricForm->addRow(tr("Fabric:"), m_fabricCombo);
@@ -338,7 +430,8 @@ const PatternPiecesPanel::FlatPiece &PatternPiecesPanel::flatPiece(const Pattern
         QVector<int> outlineVertex;
         flat.mesh = PieceMesher::mesh(piece.seamLine, meshEdge, &outlineVertex);
         flat.outlineCount = static_cast<int>(PieceMesher::resample(piece.seamLine, meshEdge).size());
-        for (const int corner : piece.corners)
+        // Edges are whole sides: a seam split by a notch, or where a line runs into a curve, stays one edge.
+        for (const int corner : PieceMesher::sides(piece.seamLine, piece.corners))
         {
             const int vertex = outlineVertex.value(corner, -1);
             if (vertex >= 0 && vertex < flat.outlineCount && !flat.corners.contains(vertex))
@@ -458,6 +551,412 @@ QVector<Viewport3D::Overlay> PatternPiecesPanel::overlays(const QVector<GarmentP
     for (const GarmentPanel &panel : panels)
     {
         result.append({panel.shape, panel.color});
+    }
+    return result;
+}
+
+namespace
+{
+//---------------------------------------------------------------------------------------------------------------------
+QColor seamColor(int index)
+{
+    // Bright, apart from the pieces' colors.
+    static const QColor colors[] = {QColor(255, 64, 129), QColor(0, 188, 212), QColor(255, 193, 7),
+                                    QColor(124, 77, 255), QColor(118, 255, 3), QColor(255, 87, 34),
+                                    QColor(29, 233, 182), QColor(213, 0, 249)};
+    return colors[index % static_cast<int>(sizeof(colors) / sizeof(colors[0]))];
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief The point of an edge at @p share of its length, as the panel is now. */
+QVector3D edgePoint(const GarmentPanel &panel, const QVector<int> &vertices, const QVector<double> &along, double share)
+{
+    for (int i = 1; i < vertices.size(); ++i)
+    {
+        if (along.at(i) >= share || i + 1 == vertices.size())
+        {
+            const double span = along.at(i) - along.at(i - 1);
+            const auto t = static_cast<float>(span > 1e-9 ? qBound(0.0, (share - along.at(i - 1)) / span, 1.0) : 0.0);
+            return panel.shape.positions.at(vertices.at(i - 1)) * (1 - t) + panel.shape.positions.at(vertices.at(i)) * t;
+        }
+    }
+    return panel.shape.positions.at(vertices.constFirst());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Where each point of an edge is along it, 0 to 1, measured on the flat piece. */
+QVector<double> shares(const GarmentPanel &panel, const QVector<int> &vertices)
+{
+    QVector<double> along(vertices.size(), 0.0);
+    for (int i = 1; i < vertices.size(); ++i)
+    {
+        along[i] = along.at(i - 1)
+                   + static_cast<double>(
+                       (panel.rest.positions.at(vertices.at(i)) - panel.rest.positions.at(vertices.at(i - 1))).length());
+    }
+    const double total = qMax(1e-9, along.constLast());
+    for (double &value : along)
+    {
+        value /= total;
+    }
+    return along;
+}
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+QString PatternPiecesPanel::SeamSpec::key() const
+{
+    return QStringLiteral("%1:%2:%3-%4:%5:%6@%7")
+        .arg(pieceA).arg(copyA).arg(edgeA).arg(pieceB).arg(copyB).arg(edgeB).arg(startA, 0, 'f', 3);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+int PatternPiecesPanel::panelIndex(quint32 piece, int copy) const
+{
+    for (int i = 0; i < m_seamPanels.size(); ++i)
+    {
+        if (m_seamPanels.at(i).pieceId == piece && m_seamPanels.at(i).copy == copy)
+        {
+            return i;
+        }
+    }
+    return -1;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString PatternPiecesPanel::edgeName(int panel, int edge) const
+{
+    if (panel < 0 || panel >= m_seamPanels.size())
+    {
+        return tr("(missing)");
+    }
+    const GarmentPanel &p = m_seamPanels.at(panel);
+    return tr("%1%2, edge %3").arg(p.name, p.copy > 0 ? tr(" (mirrored)") : QString()).arg(edge + 1);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::updateSeams(const QVector<GarmentPanel> &panels)
+{
+    m_seamPanels = panels;
+    m_foundSeams.clear();
+    for (const Seam &seam : SeamFinder::find(panels))
+    {
+        SeamSpec spec;
+        spec.pieceA = panels.at(seam.panelA).pieceId;
+        spec.copyA = panels.at(seam.panelA).copy;
+        spec.edgeA = seam.edgeA;
+        spec.pieceB = panels.at(seam.panelB).pieceId;
+        spec.copyB = panels.at(seam.panelB).copy;
+        spec.edgeB = seam.edgeB;
+        spec.reversed = seam.reversed;
+        spec.startA = seam.startA;
+        spec.endA = seam.endA;
+        m_foundSeams.append(spec);
+    }
+    rebuildSeamList();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<Seam> PatternPiecesPanel::seams(const QVector<GarmentPanel> &panels, QVector<QColor> *colors) const
+{
+    QVector<Seam> result;
+    const auto indexIn = [&panels](quint32 piece, int copy)
+    {
+        for (int i = 0; i < panels.size(); ++i)
+        {
+            if (panels.at(i).pieceId == piece && panels.at(i).copy == copy)
+            {
+                return i;
+            }
+        }
+        return -1;
+    };
+    int number = 0;
+    for (const SeamSpec &spec : m_foundSeams + m_addedSeams)
+    {
+        const int color = number++;
+        if (m_switchedOff.contains(spec.key()))
+        {
+            continue;
+        }
+        Seam seam;
+        seam.panelA = indexIn(spec.pieceA, spec.copyA);
+        seam.panelB = indexIn(spec.pieceB, spec.copyB);
+        if (seam.panelA < 0 || seam.panelB < 0 || spec.edgeA >= panels.at(seam.panelA).edgeCount()
+            || spec.edgeB >= panels.at(seam.panelB).edgeCount())
+        {
+            continue; // the pattern changed: that edge is gone
+        }
+        seam.edgeA = spec.edgeA;
+        seam.edgeB = spec.edgeB;
+        seam.reversed = spec.reversed;
+        seam.startA = spec.startA;
+        seam.endA = spec.endA;
+        result.append(seam);
+        if (colors != nullptr)
+        {
+            colors->append(seamColor(color));
+        }
+    }
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::addSeam(const SeamSpec &spec)
+{
+    SeamSpec added = spec;
+    added.added = true;
+    m_switchedOff.remove(added.key());
+    m_addedSeams.append(added);
+    rebuildSeamList();
+    emit seamsChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<PatternPiecesPanel::SeamSpec> PatternPiecesPanel::foundSeams() const
+{
+    return m_foundSeams;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool PatternPiecesPanel::showSeams() const
+{
+    return m_showSeamsCheck->isChecked();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<QPair<int, int>> PatternPiecesPanel::highlightedEdges() const
+{
+    return m_highlight;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::rebuildSeamList()
+{
+    m_updatingSeams = true;
+    m_seamList->clear();
+    int number = 0;
+    for (const SeamSpec &spec : m_foundSeams + m_addedSeams)
+    {
+        const int color = number++;
+        auto *item = new QTreeWidgetItem(m_seamList);
+        QString text = edgeName(panelIndex(spec.pieceA, spec.copyA), spec.edgeA) + QStringLiteral(" ") + QChar(0x2194) + QStringLiteral(" ")
+                       + edgeName(panelIndex(spec.pieceB, spec.copyB), spec.edgeB);
+        if (spec.endA - spec.startA < 0.999)
+        {
+            text += tr(" (part)");
+        }
+        if (spec.added)
+        {
+            text += tr(" %1 added").arg(QChar(0x2013));
+        }
+        item->setText(0, text);
+        item->setToolTip(0, text);
+        item->setData(0, Qt::UserRole, spec.key());
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
+        item->setCheckState(0, m_switchedOff.contains(spec.key()) ? Qt::Unchecked : Qt::Checked);
+        QPixmap swatch(12, 12);
+        swatch.fill(seamColor(color));
+        item->setIcon(0, QIcon(swatch));
+    }
+    m_updatingSeams = false;
+    m_removeSeamButton->setEnabled(m_seamList->topLevelItemCount() > 0);
+    m_addSeamButton->setEnabled(!m_seamPanels.isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::addSeamDialog()
+{
+    if (m_seamPanels.isEmpty())
+    {
+        return;
+    }
+    QDialog dialog(this);
+    dialog.setWindowTitle(tr("Add Seam"));
+    auto *form = new QFormLayout(&dialog);
+    QComboBox *pieces[2];
+    QComboBox *edges[2];
+    for (int side = 0; side < 2; ++side)
+    {
+        pieces[side] = new QComboBox(&dialog);
+        edges[side] = new QComboBox(&dialog);
+        for (int p = 0; p < m_seamPanels.size(); ++p)
+        {
+            const GarmentPanel &panel = m_seamPanels.at(p);
+            if (panel.sewable)
+            {
+                pieces[side]->addItem(panel.name + (panel.copy > 0 ? tr(" (mirrored)") : QString()), p);
+            }
+        }
+        form->addRow(side == 0 ? tr("Sew:") : tr("To:"), pieces[side]);
+        form->addRow(QString(), edges[side]);
+    }
+    auto *join = new QComboBox(&dialog);
+    join->addItem(tr("Start to start"), false);
+    join->addItem(tr("Start to end"), true);
+    join->setToolTip(tr("Which ends of the two edges meet"));
+    form->addRow(tr("Join:"), join);
+    auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &dialog);
+    form->addRow(buttons);
+    connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    const auto fillEdges = [this, &pieces, &edges](int side)
+    {
+        const int p = pieces[side]->currentData().toInt();
+        edges[side]->clear();
+        if (p < 0 || p >= m_seamPanels.size())
+        {
+            return;
+        }
+        for (int e = 0; e < m_seamPanels.at(p).edgeCount(); ++e)
+        {
+            edges[side]->addItem(tr("Edge %1 (%2 cm)").arg(e + 1).arg(m_seamPanels.at(p).edgeLength(e), 0, 'f', 1), e);
+        }
+    };
+    // Show the edges chosen, and join them the way their ends lie closest.
+    const auto changed = [this, &pieces, &edges, join]()
+    {
+        m_highlight.clear();
+        QVector3D ends[2][2];
+        bool complete = true;
+        for (int side = 0; side < 2; ++side)
+        {
+            const int p = pieces[side]->currentData().toInt();
+            const int e = edges[side]->currentData().toInt();
+            if (p < 0 || p >= m_seamPanels.size() || e < 0 || e >= m_seamPanels.at(p).edgeCount())
+            {
+                complete = false;
+                continue;
+            }
+            m_highlight.append(qMakePair(p, e));
+            const QVector<int> vertices = m_seamPanels.at(p).edgeVertices(e);
+            ends[side][0] = m_seamPanels.at(p).shape.positions.at(vertices.constFirst());
+            ends[side][1] = m_seamPanels.at(p).shape.positions.at(vertices.constLast());
+        }
+        if (complete)
+        {
+            const float same = (ends[0][0] - ends[1][0]).length() + (ends[0][1] - ends[1][1]).length();
+            const float crossed = (ends[0][0] - ends[1][1]).length() + (ends[0][1] - ends[1][0]).length();
+            join->setCurrentIndex(crossed < same ? 1 : 0);
+        }
+        emit highlightChanged();
+    };
+    for (int side = 0; side < 2; ++side)
+    {
+        connect(pieces[side], QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog,
+                [side, fillEdges, changed]()
+                {
+                    fillEdges(side);
+                    changed();
+                });
+        connect(edges[side], QOverload<int>::of(&QComboBox::currentIndexChanged), &dialog, changed);
+        fillEdges(side);
+    }
+    if (pieces[1]->count() > 1)
+    {
+        pieces[1]->setCurrentIndex(1);
+    }
+    changed();
+
+    const bool accepted = dialog.exec() == QDialog::Accepted;
+    m_highlight.clear();
+    emit highlightChanged();
+    if (!accepted)
+    {
+        return;
+    }
+    const int a = pieces[0]->currentData().toInt();
+    const int b = pieces[1]->currentData().toInt();
+    if (a < 0 || b < 0 || a >= m_seamPanels.size() || b >= m_seamPanels.size())
+    {
+        return;
+    }
+    SeamSpec spec;
+    spec.pieceA = m_seamPanels.at(a).pieceId;
+    spec.copyA = m_seamPanels.at(a).copy;
+    spec.edgeA = edges[0]->currentData().toInt();
+    spec.pieceB = m_seamPanels.at(b).pieceId;
+    spec.copyB = m_seamPanels.at(b).copy;
+    spec.edgeB = edges[1]->currentData().toInt();
+    spec.reversed = join->currentData().toBool();
+    if (spec.pieceA == spec.pieceB && spec.copyA == spec.copyB && spec.edgeA == spec.edgeB)
+    {
+        return; // an edge with itself
+    }
+    addSeam(spec);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Viewport3D::LineSet PatternPiecesPanel::edgeLine(const GarmentPanel &panel, int edge, const QColor &color, float width,
+                                                 double from, double to)
+{
+    Viewport3D::LineSet set;
+    set.color = color;
+    set.width = width;
+    const QVector<int> vertices = panel.edgeVertices(edge);
+    if (vertices.size() < 2)
+    {
+        return set;
+    }
+    const QVector<double> along = shares(panel, vertices);
+    QVector3D previous = edgePoint(panel, vertices, along, from);
+    for (int i = 1; i < vertices.size(); ++i)
+    {
+        if (along.at(i) <= from)
+        {
+            continue;
+        }
+        const QVector3D next = along.at(i) >= to ? edgePoint(panel, vertices, along, to)
+                                                 : panel.shape.positions.at(vertices.at(i));
+        set.segments << previous << next;
+        previous = next;
+        if (along.at(i) >= to)
+        {
+            break;
+        }
+    }
+    return set;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<Viewport3D::LineSet> PatternPiecesPanel::seamLines(const QVector<GarmentPanel> &panels,
+                                                           const QVector<Seam> &seams, const QVector<QColor> &colors)
+{
+    QVector<Viewport3D::LineSet> result;
+    for (int s = 0; s < seams.size(); ++s)
+    {
+        const Seam &seam = seams.at(s);
+        if (seam.panelA < 0 || seam.panelB < 0 || seam.panelA >= panels.size() || seam.panelB >= panels.size())
+        {
+            continue;
+        }
+        const QColor color = colors.value(s, seamColor(s));
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        result.append(edgeLine(a, seam.edgeA, color, 3.0f, seam.startA, seam.endA));
+        result.append(edgeLine(b, seam.edgeB, color, 3.0f));
+
+        // Ties between the points that meet, as tailors baste.
+        Viewport3D::LineSet ties;
+        ties.color = color;
+        ties.width = 1.0f;
+        const QVector<int> va = a.edgeVertices(seam.edgeA);
+        const QVector<int> vb = b.edgeVertices(seam.edgeB);
+        if (va.size() < 2 || vb.size() < 2)
+        {
+            continue;
+        }
+        const QVector<double> sa = shares(a, va);
+        const QVector<double> sb = shares(b, vb);
+        for (int k = 0; k <= 4; ++k)
+        {
+            const double t = k / 4.0;
+            const QVector3D pa = edgePoint(a, va, sa, seam.startA + (seam.endA - seam.startA) * t);
+            const QVector3D pb = edgePoint(b, vb, sb, seam.reversed ? 1 - t : t);
+            ties.segments << pa << pb;
+        }
+        result.append(ties);
     }
     return result;
 }

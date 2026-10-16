@@ -70,9 +70,11 @@ const char *const meshFragmentShader =
 const char *const lineVertexShader =
     "attribute highp vec3 position;\n"
     "uniform highp mat4 mvp;\n"
+    "uniform highp vec3 eye;\n"
+    "uniform highp float lift;\n"
     "void main()\n"
     "{\n"
-    "    gl_Position = mvp * vec4(position, 1.0);\n"
+    "    gl_Position = mvp * vec4(position + normalize(eye - position) * lift, 1.0);\n"
     "}\n";
 
 const char *const lineFragmentShader =
@@ -95,6 +97,7 @@ Viewport3D::Viewport3D(QWidget *parent)
     , m_meshVertices(QOpenGLBuffer::VertexBuffer)
     , m_meshIndices(QOpenGLBuffer::IndexBuffer)
     , m_gridVertices(QOpenGLBuffer::VertexBuffer)
+    , m_lineVertices(QOpenGLBuffer::VertexBuffer)
 {
     setFocusPolicy(Qt::StrongFocus);
 }
@@ -156,6 +159,20 @@ void Viewport3D::setOverlays(const QVector<Overlay> &overlays)
     }
     m_overlaysDirty = true;
     update();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Viewport3D::setLines(const QVector<LineSet> &lines)
+{
+    m_lines = lines;
+    m_linesDirty = true;
+    update();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+const QVector<Viewport3D::LineSet> &Viewport3D::lines() const
+{
+    return m_lines;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -261,6 +278,8 @@ void Viewport3D::initializeGL()
     m_meshVertices.create();
     m_meshIndices.create();
     m_gridVertices.create();
+    m_lineVertices.create();
+    m_linesDirty = true;
     m_meshDirty = true;
     m_overlaysDirty = true;
 }
@@ -287,6 +306,24 @@ void Viewport3D::paintGL()
         uploadOverlays();
         m_overlaysDirty = false;
     }
+    if (m_linesDirty)
+    {
+        // All line sets in one buffer.
+        QVector<float> data;
+        m_lineRanges.clear();
+        for (const LineSet &set : qAsConst(m_lines))
+        {
+            m_lineRanges.append(qMakePair(static_cast<int>(data.size() / 3), static_cast<int>(set.segments.size())));
+            for (const QVector3D &p : set.segments)
+            {
+                data << p.x() << p.y() << p.z();
+            }
+        }
+        m_lineVertices.bind();
+        m_lineVertices.allocate(data.constData(), static_cast<int>(data.size() * sizeof(float)));
+        m_lineVertices.release();
+        m_linesDirty = false;
+    }
 
     const QColor background = palette().color(QPalette::Base);
     glClearColor(background.redF(), background.greenF(), background.blueF(), 1.0f);
@@ -302,6 +339,8 @@ void Viewport3D::paintGL()
         m_lineProgram->bind();
         m_lineProgram->setUniformValue("mvp", mvp);
         m_lineProgram->setUniformValue("color", m_gridColor);
+        m_lineProgram->setUniformValue("eye", m_camera.eye());
+        m_lineProgram->setUniformValue("lift", 0.0f);
         m_gridVertices.bind();
         m_lineProgram->enableAttributeArray(0);
         m_lineProgram->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
@@ -320,6 +359,41 @@ void Viewport3D::paintGL()
             drawMesh(mvp, view, gpu.vertices, gpu.indices, gpu.indexCount, m_overlays.at(i).color,
                      gpu.hasColors ? &gpu.colors : nullptr);
         }
+    }
+
+    // Lines on the cloth: lifted toward the eye by a centimeter, so the cloth they lie on does not hide them.
+    if (!m_lineRanges.isEmpty() && m_lineProgram->isLinked())
+    {
+        m_lineProgram->bind();
+        m_lineProgram->setUniformValue("mvp", mvp);
+        m_lineProgram->setUniformValue("eye", m_camera.eye());
+        m_lineProgram->setUniformValue("lift", 1.0f);
+        m_lineVertices.bind();
+        m_lineProgram->enableAttributeArray(0);
+        m_lineProgram->setAttributeBuffer(0, GL_FLOAT, 0, 3, 3 * sizeof(float));
+        for (int i = 0; i < m_lineRanges.size() && i < m_lines.size(); ++i)
+        {
+            if (m_lineRanges.at(i).second < 2)
+            {
+                continue;
+            }
+            if (m_lines.at(i).onTop)
+            {
+                glDisable(GL_DEPTH_TEST);
+            }
+            else
+            {
+                glEnable(GL_DEPTH_TEST);
+            }
+            m_lineProgram->setUniformValue("color", m_lines.at(i).color);
+            glLineWidth(m_lines.at(i).width);
+            glDrawArrays(GL_LINES, m_lineRanges.at(i).first, m_lineRanges.at(i).second);
+        }
+        glLineWidth(1.0f);
+        m_lineProgram->disableAttributeArray(0);
+        m_lineVertices.release();
+        m_lineProgram->release();
+        glEnable(GL_DEPTH_TEST);
     }
 }
 
@@ -495,8 +569,10 @@ void Viewport3D::cleanupGL()
     m_meshVertices.destroy();
     m_meshIndices.destroy();
     m_gridVertices.destroy();
+    m_lineVertices.destroy();
     destroyOverlayBuffers();
     m_overlaysDirty = true;
+    m_linesDirty = true;
     m_meshProgram.reset();
     m_lineProgram.reset();
     doneCurrent();

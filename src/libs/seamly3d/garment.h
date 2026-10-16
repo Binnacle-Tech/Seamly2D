@@ -43,7 +43,8 @@ namespace Seamly3D
  *
  * Both meshes share their vertices: rest is the flat piece (centimeters, the pattern's coordinates, Z = 0), shape is
  * where it is in 3D. The first outlineCount vertices are the outline, in order. Corners are the piece's own points
- * on the outline; between two corners runs an edge (a seam line, a hem, a fold...).
+ * on the outline where it turns (see PieceMesher::sides); between two corners runs an edge: a whole side of the
+ * piece (a seam line, a hem, a fold...).
  */
 struct GarmentPanel
 {

@@ -91,6 +91,8 @@ private slots:
     void        stepSimulation();
     void        fabricChanged();
     void        showGarment();
+    void        seamsChanged();
+    void        showSeamLines();
 
 private:
     Q_DISABLE_COPY_MOVE(Workspace3DWindow)

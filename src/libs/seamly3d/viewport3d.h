@@ -73,6 +73,21 @@ public:
     void        setOverlays(const QVector<Overlay> &overlays);
     const QVector<Overlay> &overlays() const;
 
+    /**
+     * @brief Line segments (seams, highlighted edges): pairs of points. They are lifted a little toward the eye so
+     * they show on the cloth they lie on, but hide behind the body; onTop ones show through everything.
+     */
+    struct LineSet
+    {
+        QVector<QVector3D> segments{}; ///< two points per segment
+        QColor             color{};
+        float              width{1.0f};
+        bool               onTop{false};
+    };
+
+    void        setLines(const QVector<LineSet> &lines);
+    const QVector<LineSet> &lines() const;
+
     bool        isGridVisible() const;
 
     OrbitCamera       &camera();
@@ -134,6 +149,10 @@ private:
     QVector<Overlay> m_overlays{};
     QVector<GpuMesh> m_overlayBuffers{};
     bool          m_overlaysDirty{false};
+    QVector<LineSet> m_lines{};
+    QOpenGLBuffer m_lineVertices;
+    QVector<QPair<int, int>> m_lineRanges{}; ///< first vertex and count of each line set in m_lineVertices
+    bool          m_linesDirty{false};
 
     bool        m_gridVisible{true};
     QColor      m_meshColor{204, 186, 168};

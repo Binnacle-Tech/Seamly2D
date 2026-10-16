@@ -91,6 +91,8 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     connect(m_piecesPanel, &PatternPiecesPanel::simulationToggled, this, &Workspace3DWindow::setSimulationRunning);
     connect(m_piecesPanel, &PatternPiecesPanel::simulationResetRequested, this, &Workspace3DWindow::updatePieces);
     connect(m_piecesPanel, &PatternPiecesPanel::fabricChanged, this, &Workspace3DWindow::fabricChanged);
+    connect(m_piecesPanel, &PatternPiecesPanel::seamsChanged, this, &Workspace3DWindow::seamsChanged);
+    connect(m_piecesPanel, &PatternPiecesPanel::highlightChanged, this, &Workspace3DWindow::showSeamLines);
     connect(m_piecesPanel, &PatternPiecesPanel::fitMapChanged, this,
             [this]()
             {
@@ -183,6 +185,54 @@ void Workspace3DWindow::updatePieces()
     // The pieces, their arrangement or the body changed: a garment sewn before no longer applies.
     resetSimulation();
     m_viewport->setOverlays(m_piecesPanel->overlays(bodyFrame()));
+    m_piecesPanel->updateSeams(m_piecesPanel->panels(bodyFrame()));
+    showSeamLines();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::seamsChanged()
+{
+    // Seams switched on, off, added or removed: sew again from the arranged pieces.
+    const bool sewn = !m_simulator.isEmpty();
+    resetSimulation();
+    m_viewport->setOverlays(m_piecesPanel->overlays(bodyFrame()));
+    showSeamLines();
+    if (sewn)
+    {
+        m_piecesPanel->setSimulationRunning(true);
+        setSimulationRunning(true);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::showSeamLines()
+{
+    // On the cloth while it drapes, otherwise on the pieces as arranged.
+    const QVector<GarmentPanel> panels = m_simulator.isEmpty() ? m_piecesPanel->panels(bodyFrame())
+                                                               : m_simulator.panels();
+    const QVector<QPair<int, int>> highlighted = m_piecesPanel->highlightedEdges();
+    QVector<Viewport3D::LineSet> lines;
+    if (m_piecesPanel->showSeams())
+    {
+        QVector<QColor> colors;
+        const QVector<Seam> seams = m_piecesPanel->seams(panels, &colors);
+        if (!highlighted.isEmpty())
+        {
+            colors.fill(QColor(150, 150, 150)); // grayed, so the edges picked stand out
+        }
+        lines = PatternPiecesPanel::seamLines(panels, seams, colors);
+    }
+    for (const auto &edge : highlighted)
+    {
+        if (edge.first >= 0 && edge.first < panels.size() && edge.second < panels.at(edge.first).edgeCount())
+        {
+            Viewport3D::LineSet line = PatternPiecesPanel::edgeLine(panels.at(edge.first), edge.second,
+                                                                    QColor(255, 235, 59), 5.0f);
+            line.onTop = true;
+            lines.append(line);
+        }
+    }
+    m_viewport->setLines(lines);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -220,7 +270,7 @@ void Workspace3DWindow::setSimulationRunning(bool run)
             return;
         }
 
-        const QVector<Seam> seams = SeamFinder::find(panels);
+        const QVector<Seam> seams = m_piecesPanel->seams(panels);
         QStringList details;
         const auto edgeName = [&panels](int panel, int edge)
         {
@@ -239,7 +289,7 @@ void Workspace3DWindow::setSimulationRunning(bool run)
         m_simulator.setBody(m_viewport->mesh());
         m_simulator.setGarment(panels, seams);
         m_settledFrames = 0;
-        m_piecesPanel->setSimulationStatus(tr("%n seam(s) found.", nullptr, static_cast<int>(seams.size())));
+        m_piecesPanel->setSimulationStatus(tr("%n seam(s) to sew.", nullptr, static_cast<int>(seams.size())));
         m_piecesPanel->setSimulationDetails(details.join(QLatin1Char('\n')));
     }
     m_simulationTimer->start();
@@ -264,6 +314,7 @@ void Workspace3DWindow::showGarment()
         }
     }
     m_viewport->setOverlays(overlays);
+    showSeamLines();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
