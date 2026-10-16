@@ -121,13 +121,13 @@ Workspace3DIntegration::Workspace3DIntegration(QMainWindow *host, const PatternO
         helpMenu->insertSeparator(helpMenu->actions().value(1));
     }
 
-    // File > Import DXF Pattern..., right after Open.
+    // File > Import SVG or DXF Pattern..., right after Open.
     if (auto *fileMenu = host->findChild<QMenu *>(hostFileMenuName))
     {
-        auto *importAction = new QAction(tr("Import DXF Pattern..."), this);
+        auto *importAction = new QAction(tr("Import SVG or DXF Pattern..."), this);
         importAction->setObjectName(QStringLiteral("seamly3dImportDxf_Action"));
-        importAction->setToolTip(tr("Convert a DXF pattern (AAMA/ASTM, from another pattern CAD) into a Seamly2D "
-                                    "pattern"));
+        importAction->setToolTip(tr("Convert an SVG or DXF pattern (pattern sites, Inkscape, other pattern CAD) into a "
+                                    "Seamly2D pattern"));
         connect(importAction, &QAction::triggered, this, &Workspace3DIntegration::importDxfPattern);
         QAction *before = nullptr;
         const QList<QAction *> actions = fileMenu->actions();

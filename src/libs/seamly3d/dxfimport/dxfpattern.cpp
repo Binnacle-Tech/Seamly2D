@@ -289,12 +289,15 @@ void curves(const QVector<DxfEntity> &entities, const QTransform &transform, dou
         {
             continue;
         }
-        const QPolygonF points = cleaned(transform.map(entity.flatten(tolerance)), tolerance);
+        const QPolygonF flat = transform.map(entity.flatten(tolerance));
+        // Many exporters close a shape by ending where it starts, without marking it closed.
+        const bool endsAtStart = flat.size() > 3 && QLineF(flat.constFirst(), flat.constLast()).length() <= tolerance * 5;
+        const QPolygonF points = cleaned(flat, tolerance);
         if (points.size() < 2)
         {
             continue;
         }
-        const bool isClosed = entity.closed || entity.type == QLatin1String("CIRCLE")
+        const bool isClosed = entity.closed || endsAtStart || entity.type == QLatin1String("CIRCLE")
                               || (entity.type == QLatin1String("ELLIPSE")
                                   && qAbs(entity.endAngle - entity.startAngle - 2 * M_PI) < 1e-6);
         if (isClosed && points.size() > 2)
@@ -343,6 +346,48 @@ void applyLabels(DxfPiece &piece, const QStringList &texts)
         {
             piece.annotation = value;
         }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Reads what plain text on a piece says, as pattern sites print it: "Cut 2 from main fabric" (quantity),
+ * "Cut on fold", and the piece's name (the first text that is not one of those, a number, a date, a version or the
+ * site's name).
+ */
+void applyPlainTexts(DxfPiece &piece, const QStringList &texts)
+{
+    static const QRegularExpression cut(QStringLiteral("\\bcut\\s+(\\d+)"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression fold(QStringLiteral("\\bfold\\b"), QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression notName(
+        QStringLiteral("\\bcut\\b|\\bfold\\b|grain|seam allowance|freesewing|\\bv?\\d+\\.\\d+|\\b(19|20)\\d\\d\\b|"
+                       "^\\W*\\d+\\W*$|https?:|www\\.|\\.com|\\.org"),
+        QRegularExpression::CaseInsensitiveOption);
+    static const QRegularExpression letters(QStringLiteral("[^\\W\\d_]"));
+    QString name;
+    for (const QString &line : texts)
+    {
+        const QString text = line.simplified();
+        const QRegularExpressionMatch quantity = cut.match(text);
+        if (quantity.hasMatch() && piece.quantity == 1)
+        {
+            piece.quantity = qMax(1, quantity.captured(1).toInt());
+        }
+        if (fold.match(text).hasMatch() && text.contains(QLatin1String("cut"), Qt::CaseInsensitive))
+        {
+            piece.hasMirrorLine = true;
+        }
+        QString key;
+        QString value;
+        if (name.isEmpty() && text.size() <= 40 && text.count(letters) >= 3 && !notName.match(text).hasMatch()
+            && !labelValue(text, key, value))
+        {
+            name = text;
+        }
+    }
+    if (piece.name.isEmpty())
+    {
+        piece.name = name;
     }
 }
 
@@ -487,6 +532,271 @@ void expand(const DxfDocument &document, const QVector<DxfEntity> &entities, con
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+double sizeOf(const QPolygonF &polygon)
+{
+    const QRectF box = polygon.boundingRect();
+    return qMax(box.width(), box.height());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief How round a closed outline is: 1 for a circle, 0.79 for a square, less for anything longer. */
+double roundness(const QPolygonF &polygon)
+{
+    double perimeter = 0;
+    for (int i = 0; i < polygon.size(); ++i)
+    {
+        perimeter += QLineF(polygon.at(i), polygon.at((i + 1) % polygon.size())).length();
+    }
+    return perimeter > 0 ? 4 * M_PI * qAbs(signedArea(polygon)) / (perimeter * perimeter) : 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief The two points of @p line farthest apart. */
+QLineF span(const QPolygonF &line)
+{
+    QLineF best;
+    for (int i = 0; i < line.size(); ++i)
+    {
+        for (int j = i + 1; j < line.size(); ++j)
+        {
+            if (QLineF(line.at(i), line.at(j)).length() > best.length())
+            {
+                best = QLineF(line.at(i), line.at(j));
+            }
+        }
+    }
+    return best;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief isStraight is true for a line that does not stray from its span by more than @p share of its length. */
+bool isStraight(const QPolygonF &line, double share)
+{
+    const QLineF chord = span(line);
+    if (chord.length() <= 0)
+    {
+        return false;
+    }
+    for (const QPointF &p : line)
+    {
+        if (distanceToSegment(p, chord.p1(), chord.p2()) > chord.length() * share)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Sorts out what is drawn inside and around a piece of a plain DXF.
+ *
+ * Exports from PDF or SVG draw everything as lines: text is letters outlined, notches are small circles on the edge,
+ * the grain line is a long straight line, a fold is marked by a bracket along the edge. Small closed outlines are
+ * letters and marks: those centered on the edge are notches, isolated round ones are drill holes (buttons, snaps),
+ * the rest is left out.
+ */
+void classifyMarks(DxfPiece &piece, const QVector<QPolygonF> &innerLoops, const QVector<QPolygonF> &innerLines,
+                   const QVector<QPolygonF> &marksAround, const QVector<QPointF> &texts, double smallest,
+                   double tolerance, int &leftOut)
+{
+    const double pieceSize = sizeOf(piece.cutLine);
+    const double near = pieceSize * 0.06;
+
+    const auto farthestFromEdge = [&piece](const QPolygonF &line)
+    {
+        double farthest = 0;
+        for (const QPointF &p : line)
+        {
+            farthest = qMax(farthest, distanceToOutline(p, piece.cutLine));
+        }
+        return farthest;
+    };
+    // A line lying on the edge is the edge drawn again.
+    const auto onEdge = [&farthestFromEdge, pieceSize, tolerance](const QPolygonF &line)
+    { return farthestFromEdge(line) <= qMax(pieceSize * 0.003, tolerance * 5); };
+    // A line running along the edge, close to it all along, is a fold mark ("cut on fold" bracket).
+    const auto foldMark = [&farthestFromEdge, pieceSize, near](const QPolygonF &line)
+    { return line.size() >= 3 && span(line).length() >= pieceSize * 0.15 && farthestFromEdge(line) <= near; };
+    // The fold is along the bracket's longest straight stretch.
+    const auto markFold = [&piece](const QPolygonF &line)
+    {
+        if (piece.hasMirrorLine)
+        {
+            return;
+        }
+        QLineF longest;
+        const int n = static_cast<int>(line.size());
+        for (int i = 0; i < n; ++i)
+        {
+            const QLineF edge(line.at(i), line.at((i + 1) % n));
+            if (edge.length() > longest.length())
+            {
+                longest = edge;
+            }
+        }
+        piece.mirrorLine = longest;
+        piece.hasMirrorLine = true;
+    };
+
+    // Small outlines (as small as the largest piece's letters, or small for this piece) are marks.
+    QVector<QPolygonF> small;
+    QVector<QPolygonF> large;
+    for (const QPolygonF &loop : innerLoops)
+    {
+        if (onEdge(loop))
+        {
+            continue;
+        }
+        if (sizeOf(loop) >= qMax(pieceSize * 0.06, smallest * 1.5))
+        {
+            large.append(loop);
+        }
+        else
+        {
+            small.append(loop);
+        }
+    }
+    for (const QPolygonF &loop : qAsConst(large))
+    {
+        if (foldMark(loop))
+        {
+            markFold(loop);
+            continue;
+        }
+        // A frame around text, or a logo: many letters inside (drawn as outlines, or real text).
+        int letters = 0;
+        for (const QPolygonF &mark : qAsConst(small))
+        {
+            letters += loop.containsPoint(mark.boundingRect().center(), Qt::OddEvenFill) ? 1 : 0;
+        }
+        int lines = 0;
+        for (const QPointF &text : texts)
+        {
+            lines += loop.containsPoint(text, Qt::OddEvenFill) ? 1 : 0;
+        }
+        if (letters >= 5 || lines >= 3)
+        {
+            ++leftOut;
+            continue;
+        }
+        QPolygonF line = loop;
+        line.append(line.constFirst()); // closed internal lines end where they start
+        piece.internalLines.append(line);
+    }
+
+    // Notches: small marks centered on the edge, inside or around the piece.
+    QVector<QPolygonF> candidates = small + marksAround;
+    QVector<bool> used(candidates.size(), false);
+    for (int i = 0; i < candidates.size(); ++i)
+    {
+        const QPolygonF &mark = candidates.at(i);
+        const double radius = sizeOf(mark) / 2;
+        const QPointF center = mark.boundingRect().center();
+        // on the cut line, or on the seam line
+        const double fromEdge = qMin(distanceToOutline(center, piece.cutLine),
+                                     piece.sewLine.isEmpty() ? std::numeric_limits<double>::max()
+                                                             : distanceToOutline(center, piece.sewLine));
+        if (radius > pieceSize * 0.03 || fromEdge > radius * 1.2 + tolerance)
+        {
+            continue;
+        }
+        used[i] = true;
+        bool known = false;
+        for (const QLineF &notch : qAsConst(piece.notches))
+        {
+            known = known || QLineF(notch.p1(), center).length() <= radius;
+        }
+        if (!known)
+        {
+            piece.notches.append(QLineF(center, center));
+        }
+    }
+
+    // Drill holes: round marks inside with nothing else close by (letters always have neighbours); rings of circles
+    // around the same center are one hole.
+    for (int i = 0; i < small.size(); ++i)
+    {
+        if (used.at(i))
+        {
+            continue;
+        }
+        const QPolygonF &mark = small.at(i);
+        const double size = sizeOf(mark);
+        const QPointF center = mark.boundingRect().center();
+        if (roundness(mark) < 0.9 || size < pieceSize * 0.004)
+        {
+            continue;
+        }
+        bool isolated = true;
+        for (int j = 0; j < small.size() && isolated; ++j)
+        {
+            const QPointF other = small.at(j).boundingRect().center();
+            const double distance = QLineF(center, other).length();
+            isolated = j == i || distance < size * 0.2 || distance > size * 2.5;
+        }
+        if (!isolated)
+        {
+            continue;
+        }
+        bool known = false;
+        for (const QPointF &hole : qAsConst(piece.drillHoles))
+        {
+            known = known || QLineF(hole, center).length() < size * 0.2;
+        }
+        if (!known)
+        {
+            piece.drillHoles.append(center);
+        }
+        used[i] = true;
+    }
+    for (int i = 0; i < small.size(); ++i)
+    {
+        leftOut += used.at(i) ? 0 : 1;
+    }
+
+    // Lines: the grain line is the longest straight one; a bracket from the edge and back marks a fold.
+    int grain = -1;
+    for (int i = 0; i < innerLines.size(); ++i)
+    {
+        const QPolygonF &line = innerLines.at(i);
+        if (line.size() >= 2 && sizeOf(line) >= pieceSize * 0.2 && isStraight(line, 0.025)
+            && (grain < 0 || span(line).length() > span(innerLines.at(grain)).length()))
+        {
+            grain = i;
+        }
+    }
+    if (grain >= 0 && !piece.hasGrainline)
+    {
+        piece.grainline = span(innerLines.at(grain));
+        piece.hasGrainline = true;
+    }
+    for (int i = 0; i < innerLines.size(); ++i)
+    {
+        const QPolygonF &line = innerLines.at(i);
+        if (i == grain)
+        {
+            continue;
+        }
+        if (onEdge(line))
+        {
+            continue;
+        }
+        if (foldMark(line))
+        {
+            markFold(line);
+            continue;
+        }
+        if (sizeOf(line) < pieceSize * 0.04)
+        {
+            ++leftOut; // part of a letter, an arrow head...
+            continue;
+        }
+        piece.internalLines.append(line);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 /** @brief Pieces of a DXF that is not an AAMA file: every outermost closed outline. */
 QVector<DxfPiece> plainPieces(const DxfDocument &document, double tolerance, QStringList &warnings)
 {
@@ -512,10 +822,20 @@ QVector<DxfPiece> plainPieces(const DxfDocument &document, double tolerance, QSt
     QVector<QPolygonF> leftover;
     closed += chainLoops(open, tolerance * 5, &leftover);
 
-    // Largest first: a piece is an outline not inside a larger one.
+    // Largest first: a piece is an outline not inside a larger one, and not tiny next to the largest (letters drawn
+    // as outlines, notch marks, logos).
     std::sort(closed.begin(), closed.end(), [](const QPolygonF &a, const QPolygonF &b)
               { return qAbs(signedArea(a)) > qAbs(signedArea(b)); });
+    double largest = 0;
+    for (const QPolygonF &loop : qAsConst(closed))
+    {
+        largest = qMax(largest, sizeOf(loop));
+    }
+    const double smallest = largest * 0.04;
+
     QVector<DxfPiece> pieces;
+    QVector<QVector<QPolygonF>> innerLoops;
+    QVector<QPolygonF> marks; // small outlines outside every piece
     QVector<bool> used(closed.size(), false);
     for (int i = 0; i < closed.size(); ++i)
     {
@@ -524,90 +844,98 @@ QVector<DxfPiece> plainPieces(const DxfDocument &document, double tolerance, QSt
             continue;
         }
         bool nested = false;
-        for (const DxfPiece &piece : pieces)
+        for (int p = 0; p < pieces.size() && !nested; ++p)
         {
-            if (isInside(closed.at(i), piece.cutLine))
+            if (isInside(closed.at(i), pieces.at(p).cutLine))
             {
                 nested = true;
-                break;
+                innerLoops[p].append(closed.at(i));
+                used[i] = true;
             }
         }
         if (nested)
         {
             continue;
         }
-
+        used[i] = true;
+        if (sizeOf(closed.at(i)) < smallest)
+        {
+            marks.append(closed.at(i));
+            continue;
+        }
         DxfPiece piece;
         piece.cutLine = closed.at(i);
-        used[i] = true;
-        for (int j = i + 1; j < closed.size(); ++j)
+        pieces.append(piece);
+        innerLoops.append(QVector<QPolygonF>());
+    }
+
+    int leftOut = 0;
+    for (int p = 0; p < pieces.size(); ++p)
+    {
+        DxfPiece &piece = pieces[p];
+        QVector<QPolygonF> loops;
+        for (const QPolygonF &loop : qAsConst(innerLoops.at(p)))
         {
-            if (used.at(j) || !isInside(closed.at(j), piece.cutLine))
+            if (piece.sewLine.isEmpty() && isOffsetOf(loop, piece.cutLine))
             {
-                continue;
-            }
-            used[j] = true;
-            if (piece.sewLine.isEmpty() && isOffsetOf(closed.at(j), piece.cutLine))
-            {
-                piece.sewLine = closed.at(j);
+                piece.sewLine = loop;
             }
             else
             {
-                QPolygonF line = closed.at(j);
-                line.append(line.constFirst()); // closed internal lines end where they start
-                piece.internalLines.append(line);
+                loops.append(loop);
             }
         }
+        QVector<QPolygonF> lines;
         for (const QPolygonF &line : qAsConst(leftover))
         {
             if (isInside(line, piece.cutLine))
             {
-                piece.internalLines.append(line);
+                lines.append(line);
             }
         }
         QStringList pieceTexts;
+        QVector<QPointF> textPositions;
         for (const auto &text : qAsConst(texts))
         {
             if (piece.cutLine.containsPoint(text.first, Qt::OddEvenFill))
             {
                 pieceTexts += text.second.split(QLatin1Char('\n'));
+                textPositions.append(text.first);
             }
         }
+        classifyMarks(piece, loops, lines, marks, textPositions, smallest, tolerance, leftOut);
         applyLabels(piece, pieceTexts);
-        if (piece.name.isEmpty())
-        {
-            // A short text on the piece names it.
-            for (const QString &text : qAsConst(pieceTexts))
-            {
-                QString key;
-                QString value;
-                if (!text.trimmed().isEmpty() && text.size() <= 40 && !labelValue(text, key, value))
-                {
-                    piece.name = text.trimmed();
-                    break;
-                }
-            }
-        }
-        pieces.append(piece);
+        applyPlainTexts(piece, pieceTexts);
     }
 
-    if (!leftover.isEmpty())
+    // In reading order, as laid out in the drawing: rows from the top, left to right.
+    const double row = qMax(largest * 0.25, 1e-9);
+    std::stable_sort(pieces.begin(), pieces.end(), [row](const DxfPiece &a, const DxfPiece &b)
+                     {
+                         const int rowA = qFloor(-a.cutLine.boundingRect().bottom() / row);
+                         const int rowB = qFloor(-b.cutLine.boundingRect().bottom() / row);
+                         return rowA != rowB ? rowA < rowB
+                                             : a.cutLine.boundingRect().left() < b.cutLine.boundingRect().left();
+                     });
+
+    int outside = 0;
+    for (const QPolygonF &line : qAsConst(leftover))
     {
-        int outside = 0;
-        for (const QPolygonF &line : qAsConst(leftover))
+        bool inPiece = false;
+        for (const DxfPiece &piece : qAsConst(pieces))
         {
-            bool inPiece = false;
-            for (const DxfPiece &piece : qAsConst(pieces))
-            {
-                inPiece = inPiece || isInside(line, piece.cutLine);
-            }
-            outside += inPiece ? 0 : 1;
+            inPiece = inPiece || isInside(line, piece.cutLine);
         }
-        if (outside > 0)
-        {
-            warnings.append(DxfPatternReader::tr("%n line(s) that do not close into an outline were left out.", nullptr,
-                                                 outside));
-        }
+        outside += inPiece ? 0 : 1;
+    }
+    if (outside > 0)
+    {
+        warnings.append(DxfPatternReader::tr("%n line(s) outside the pieces were left out.", nullptr, outside));
+    }
+    if (leftOut > 0)
+    {
+        warnings.append(DxfPatternReader::tr("%n small outline(s) on the pieces (text drawn as lines, marks) were left "
+                                             "out.", nullptr, leftOut));
     }
     return pieces;
 }

@@ -47,8 +47,7 @@ class Workspace3DWindow;
  * Call Workspace3DIntegration::install() once from the host main window. It adds a "3D Workspace" toggle to the host's
  * View menu (falling back to the menu bar) and "How to Measure (Body)" to its Help menu. The 3D workspace opens as a
  * dock of the main window, next to the 2D pattern (it can be floated out); it is created on first use. It also adds
- * "Import DXF Pattern..." to the File menu: a wizard converting DXF patterns from other CAD systems into Seamly2D
- * patterns. No other 2D code needs to know about any of this.
+ * "Import SVG or DXF Pattern..." to the File menu: a wizard converting SVG and DXF patterns into Seamly2D patterns. No other 2D code needs to know about any of this.
  */
 class Workspace3DIntegration : public QObject
 {

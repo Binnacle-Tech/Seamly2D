@@ -32,6 +32,7 @@
 #include <QComboBox>
 #include <QDir>
 #include <QDoubleSpinBox>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -51,6 +52,7 @@
 #include <QWizardPage>
 
 #include "dxfreader.h"
+#include "svgreader.h"
 
 namespace Seamly3D
 {
@@ -109,9 +111,9 @@ public:
     explicit DxfFilePage(DxfImportWizard *wizard)
         : QWizardPage(wizard), m_wizard(wizard)
     {
-        setTitle(DxfImportWizard::tr("DXF pattern"));
-        setSubTitle(DxfImportWizard::tr("Choose a DXF file exported from a pattern CAD system (AAMA or ASTM), or any "
-                                        "DXF drawing of pattern pieces."));
+        setTitle(DxfImportWizard::tr("Pattern file"));
+        setSubTitle(DxfImportWizard::tr("Choose an SVG or DXF pattern: from a pattern site or Inkscape (SVG), from a "
+                                        "pattern CAD system (AAMA or ASTM DXF), or any drawing of pattern pieces."));
         auto *layout = new QVBoxLayout(this);
         auto *row = new QHBoxLayout;
         row->addWidget(wizard->m_fileEdit, 1);
@@ -126,9 +128,10 @@ public:
                 [this]()
                 {
                     const QString file = QFileDialog::getOpenFileName(
-                        this, DxfImportWizard::tr("DXF pattern"),
+                        this, DxfImportWizard::tr("Pattern file"),
                         lastDirectory.isEmpty() ? QDir::homePath() : lastDirectory,
-                        DxfImportWizard::tr("DXF files (*.dxf *.DXF);;All files (*)"));
+                        DxfImportWizard::tr("Patterns (*.svg *.SVG *.dxf *.DXF);;SVG drawings (*.svg *.SVG);;"
+                                            "DXF drawings (*.dxf *.DXF);;All files (*)"));
                     if (!file.isEmpty())
                     {
                         m_wizard->m_fileEdit->setText(QDir::toNativeSeparators(file));
@@ -504,7 +507,7 @@ DxfImportWizard::DxfImportWizard(const QString &patternUnit, QWidget *parent)
     , m_openCheck(new QCheckBox(tr("Open the pattern when done"), this))
 {
     setObjectName(QStringLiteral("seamly3dDxfImportWizard"));
-    setWindowTitle(tr("Import DXF Pattern"));
+    setWindowTitle(tr("Import SVG or DXF Pattern"));
     setWizardStyle(QWizard::ModernStyle);
     setOption(QWizard::NoBackButtonOnStartPage);
     resize(860, 600);
@@ -520,8 +523,9 @@ DxfImportWizard::DxfImportWizard(const QString &patternUnit, QWidget *parent)
     m_piecesTable->verticalHeader()->hide();
     m_piecesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_piecesTable->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_piecesTable->horizontalHeader()->setSectionResizeMode(NameColumn, QHeaderView::Stretch);
-    m_piecesTable->horizontalHeader()->setSectionResizeMode(ContentsColumn, QHeaderView::ResizeToContents);
+    m_piecesTable->horizontalHeader()->setSectionResizeMode(NameColumn, QHeaderView::Interactive);
+    m_piecesTable->horizontalHeader()->setSectionResizeMode(ContentsColumn, QHeaderView::Stretch);
+    m_piecesTable->setColumnWidth(NameColumn, 150);
 
     m_allowanceSpin->setRange(0, 100);
     m_allowanceSpin->setDecimals(2);
@@ -598,13 +602,38 @@ const DxfPattern &DxfImportWizard::pattern() const
 //---------------------------------------------------------------------------------------------------------------------
 bool DxfImportWizard::readFile(const QString &fileName, QString *error)
 {
-    DxfReader reader;
-    DxfDocument document;
-    if (!reader.read(fileName, document))
+    QFile file(fileName);
+    if (!file.open(QIODevice::ReadOnly))
     {
         if (error != nullptr)
         {
-            *error = reader.errorString();
+            *error = tr("Could not open %1: %2").arg(fileName, file.errorString());
+        }
+        return false;
+    }
+    const QByteArray data = file.readAll();
+
+    // SVG or DXF, by what the file holds rather than its name.
+    DxfDocument document;
+    bool read = false;
+    QString message;
+    if (SvgReader::isSvg(data))
+    {
+        SvgReader reader;
+        read = reader.parse(data, document);
+        message = reader.errorString();
+    }
+    else
+    {
+        DxfReader reader;
+        read = reader.parse(data, document);
+        message = reader.errorString();
+    }
+    if (!read)
+    {
+        if (error != nullptr)
+        {
+            *error = message;
         }
         return false;
     }
@@ -663,6 +692,7 @@ void DxfImportWizard::fillPieces()
             contents << tr("%n drill hole(s)", nullptr, static_cast<int>(piece.drillHoles.size()));
         }
         auto *details = new QTableWidgetItem(contents.join(QStringLiteral(", ")));
+        details->setToolTip(details->text());
         details->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
         m_piecesTable->setItem(row, ContentsColumn, details);
     }
@@ -676,7 +706,7 @@ void DxfImportWizard::fillPieces()
     }
     QStringList summary;
     summary << tr("%1: %n piece(s).", nullptr, static_cast<int>(m_pattern.pieces.size()))
-                   .arg(m_pattern.astm ? tr("AAMA/ASTM pattern") : tr("DXF drawing"));
+                   .arg(m_pattern.astm ? tr("AAMA/ASTM pattern") : tr("Drawing"));
     summary << tr("Units: %1, %2.").arg(unitName(m_pattern.unit).toLower(), m_pattern.unitSource);
     for (const QString &warning : qAsConst(m_pattern.warnings))
     {
@@ -709,7 +739,7 @@ DxfImportOptions DxfImportWizard::options() const
     const QFileInfo dxf(m_dxfFileName);
     options.patternName = m_pattern.styleName.isEmpty() ? dxf.completeBaseName() : m_pattern.styleName;
     options.description = tr("Converted from %1 (%2, %3).")
-                              .arg(dxf.fileName(), m_pattern.astm ? tr("AAMA/ASTM pattern") : tr("DXF drawing"),
+                              .arg(dxf.fileName(), m_pattern.astm ? tr("AAMA/ASTM pattern") : tr("drawing"),
                                    unitName(options.sourceUnit).toLower());
     return options;
 }

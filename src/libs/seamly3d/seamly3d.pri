@@ -24,6 +24,7 @@ SOURCES += \
     $$PWD/makehuman/makehumanmodel.cpp \
     $$PWD/makehuman/makehumanfitter.cpp \
     $$PWD/dxfimport/dxfreader.cpp \
+    $$PWD/dxfimport/svgreader.cpp \
     $$PWD/dxfimport/dxfpattern.cpp \
     $$PWD/dxfimport/outlinefitter.cpp \
     $$PWD/dxfimport/dxfpatternconverter.cpp \
@@ -55,6 +56,7 @@ HEADERS += \
     $$PWD/makehuman/makehumanmodel.h \
     $$PWD/makehuman/makehumanfitter.h \
     $$PWD/dxfimport/dxfreader.h \
+    $$PWD/dxfimport/svgreader.h \
     $$PWD/dxfimport/dxfpattern.h \
     $$PWD/dxfimport/outlinefitter.h \
     $$PWD/dxfimport/dxfpatternconverter.h \

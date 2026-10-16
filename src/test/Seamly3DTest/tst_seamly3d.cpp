@@ -46,6 +46,7 @@
 #include "dxfimport/dxfpatternconverter.h"
 #include "dxfimport/dxfreader.h"
 #include "dxfimport/outlinefitter.h"
+#include "dxfimport/svgreader.h"
 #include "garment.h"
 #include "makehuman/makehumanfitter.h"
 #include "makehuman/makehumanmodel.h"
@@ -244,6 +245,10 @@ private slots:
     void dxfConverterWritesValidPattern();
     void dxfConverterRebuildsOutline();
     void dxfImportWizardConverts();
+    void svgPathCommands();
+    void svgUnitsAndTransforms();
+    void svgPatternPieces();
+    void dxfPlainMarks();
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2493,6 +2498,199 @@ void TST_Seamly3D::dxfImportWizardConverts()
     const int first = other.currentId();
     other.next();
     QCOMPARE(other.currentId(), first);
+}
+
+namespace
+{
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief An SVG pattern laid out like FreeSewing's: millimeters, a back piece with its seam line and seam allowance
+ * line, notches as <use> of a pair of circles, a grain line with markers, text lines in tspans, and transforms.
+ */
+QByteArray patternSvg()
+{
+    return QByteArrayLiteral(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" xmlns:xlink=\"http://www.w3.org/1999/xlink\""
+        " width=\"500mm\" height=\"400mm\" viewBox=\"0 0 500 400\">\n"
+        "<defs>\n"
+        "  <g id=\"notch\"><circle cx=\"0\" cy=\"0\" r=\"1.4\" class=\"notch\"/><circle cx=\"0\" cy=\"0\" r=\"2.8\"/></g>\n"
+        "  <marker id=\"grainlineFrom\" markerWidth=\"6\" markerHeight=\"4\"><path d=\"M 0,2 L 6,0 L 6,4 z\"/></marker>\n"
+        "</defs>\n"
+        "<g id=\"stack-back\" transform=\"translate(20, 20)\">\n"
+        " <g id=\"part-back\" transform=\"translate(10 0)\">\n"
+        "  <path class=\"fabric\" d=\"M 0,0 L 200,0 C 200,100 220,200 200,300 L 0,300 Z\"/>\n"
+        "  <path class=\"fabric sa\" d=\"M -10,-10 L 210,-10 C 210,100 230,200 210,310 L -10,310 Z\"/>\n"
+        "  <path class=\"note grainline\" marker-start=\"url(#grainlineFrom)\" d=\"M 60 40 L 60 260\"/>\n"
+        "  <text x=\"100\" y=\"140\" class=\"center\"><tspan>Back</tspan>"
+        "<tspan x=\"100\" dy=\"8\">Cut 2 from main fabric</tspan><tspan x=\"100\" dy=\"8\">Devon v4.10.2</tspan></text>\n"
+        "  <use xlink:href=\"#notch\" x=\"0\" y=\"150\"/>\n"
+        "  <use xlink:href=\"#notch\" x=\"100\" y=\"300\"/>\n"
+        "  <circle cx=\"100\" cy=\"60\" r=\"4\" class=\"button\"/>\n"
+        "  <rect x=\"40\" y=\"200\" width=\"90\" height=\"40\" class=\"title\"/>"
+        "<text x=\"45\" y=\"210\">FreeSewing</text><text x=\"45\" y=\"220\">Devon denim jacket</text>"
+        "<text x=\"45\" y=\"230\">Thursday, Oct 16, 2026</text>\n"
+        " </g>\n"
+        "</g>\n"
+        "<g id=\"stack-pocket\"><rect x=\"300\" y=\"20\" width=\"120\" height=\"140\" class=\"fabric\"/>"
+        "<text x=\"360\" y=\"90\">Pocket</text><text x=\"360\" y=\"100\">Cut 4</text></g>\n"
+        "<g style=\"display:none\"><rect x=\"300\" y=\"200\" width=\"150\" height=\"150\"/></g>\n"
+        "</svg>\n");
+}
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::svgPathCommands()
+{
+    // Relative and absolute lines, H/V, a cubic, a smooth cubic, a quadratic, an arc (flags packed together) and Z.
+    const QByteArray svg = "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"100mm\" height=\"100mm\" "
+                           "viewBox=\"0 0 100 100\"><path d=\"M10 10 h20 v20 H10 Z m 50 0 l10 0 10 10 "
+                           "a10 10 0 01-20 0 z M 0 80 C 0 70 20 70 20 80 S 40 90 40 80 Q 50 60 60 80 T 80 80\"/>"
+                           "</svg>";
+    SvgReader reader;
+    DxfDocument document;
+    QVERIFY2(reader.parse(svg, document), qPrintable(reader.errorString()));
+    QCOMPARE(document.entities.size(), 3);
+
+    const DxfEntity &square = document.entities.at(0);
+    QVERIFY(square.closed);
+    QCOMPARE(square.points.size(), 4);
+    QCOMPARE(square.points.at(2), QPointF(30, -30)); // millimeters, Y up
+
+    // The second: two lines (the coordinates after "l" are more lines), then a half circle of radius 10 back down
+    // to (60, 10), bulging below in SVG (Y down), so above (Y up).
+    const DxfEntity &arc = document.entities.at(1);
+    QVERIFY(arc.closed);
+    QCOMPARE(arc.points.at(1), QPointF(70, -10));
+    QCOMPARE(arc.points.at(2), QPointF(80, -20));
+    double lowest = 0;
+    for (const QPointF &p : arc.points)
+    {
+        lowest = qMin(lowest, p.y());
+    }
+    QVERIFY2(qAbs(lowest - -30) < 0.05, qPrintable(QString::number(lowest)));
+
+    const DxfEntity &curves = document.entities.at(2);
+    QVERIFY(!curves.closed);
+    QVERIFY(curves.points.size() > 20);
+    QCOMPARE(curves.points.constLast(), QPointF(80, -80));
+    // The cubic's middle: (10, 72.5) in SVG.
+    double best = 1e9;
+    for (const QPointF &p : curves.points)
+    {
+        best = qMin(best, QLineF(p, QPointF(10, -72.5)).length());
+    }
+    QVERIFY2(best < 0.1, qPrintable(QString::number(best)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::svgUnitsAndTransforms()
+{
+    // 2 inches wide over a 100 unit viewBox: a user unit is 0.508 mm. Without units: 96 pixels per inch.
+    SvgReader reader;
+    DxfDocument document;
+    QVERIFY(reader.parse("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"2in\" height=\"2in\" viewBox=\"0 0 100 100\">"
+                         "<g transform=\"translate(10,0) scale(2)\"><line x1=\"0\" y1=\"0\" x2=\"10\" y2=\"0\"/></g></svg>",
+                         document));
+    QCOMPARE(document.entities.size(), 1);
+    QVERIFY(qAbs(document.entities.at(0).points.at(0).x() - 10 * 0.508) < 1e-9);
+    QVERIFY(qAbs(document.entities.at(0).points.at(1).x() - 30 * 0.508) < 1e-9);
+
+    QVERIFY(reader.parse("<svg xmlns=\"http://www.w3.org/2000/svg\"><rect x=\"0\" y=\"0\" width=\"96\" height=\"48\"/></svg>",
+                         document));
+    QVERIFY(qAbs(document.entities.at(0).points.at(1).x() - 25.4) < 1e-9);
+
+    QVERIFY(SvgReader::isSvg("  <?xml version=\"1.0\"?><svg/>"));
+    QVERIFY(!SvgReader::isSvg("  0\nSECTION\n"));
+    QVERIFY(!reader.parse("<html/>", document));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::svgPatternPieces()
+{
+    SvgReader reader;
+    DxfDocument document;
+    QVERIFY(reader.parse(patternSvg(), document));
+    const DxfPattern pattern = DxfPatternReader::extract(document);
+    QCOMPARE(pattern.unit, QStringLiteral("mm"));
+    QCOMPARE(pattern.pieces.size(), 2); // the hidden rectangle is not drawn
+
+    const DxfPiece &back = pattern.pieces.at(0);
+    QCOMPARE(back.name, QStringLiteral("Back"));
+    QCOMPARE(back.quantity, 2);
+    QVERIFY(!back.sewLine.isEmpty()); // the seam line inside the seam allowance line
+    QVERIFY(qAbs(back.cutLine.boundingRect().left() - 20) < 1e-6);
+    QCOMPARE(back.notches.size(), 2);
+    QVERIFY(back.hasGrainline);
+    QVERIFY(qAbs(back.grainline.length() - 220) < 1e-6);
+    QCOMPARE(back.drillHoles.size(), 1); // the button
+    QVERIFY(back.internalLines.isEmpty());
+
+    const DxfPiece &pocket = pattern.pieces.at(1);
+    QCOMPARE(pocket.name, QStringLiteral("Pocket"));
+    QCOMPARE(pocket.quantity, 4);
+
+    // Into a pattern: valid, with the seam allowance from the file.
+    DxfImportOptions options;
+    options.sourceUnit = pattern.unit;
+    const QVector<PreparedPiece> pieces = DxfPatternConverter::prepare(pattern, options);
+    QCOMPARE(pieces.size(), 2);
+    QVERIFY(qAbs(pieces.at(0).width - 1.0) < 0.011);
+    QDomDocument dom;
+    QVERIFY(dom.setContent(DxfPatternConverter::write(pieces, options)));
+    QCOMPARE(dom.elementsByTagName(QStringLiteral("piece")).size(), 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfPlainMarks()
+{
+    // A drawing exported from a PDF: a piece outline drawn as an open polyline ending where it starts, letters as
+    // tiny outlines, notches as small circles on the edge, a grain line, a "cut on fold" bracket along the left edge
+    // and a stretch of the edge drawn twice.
+    DxfText dxf;
+    dxf(0, QStringLiteral("SECTION"))(2, QStringLiteral("ENTITIES"));
+    dxf.polyline(QStringLiteral("0"), {QPointF(0, 0), QPointF(300, 0), QPointF(300, 500), QPointF(0, 500), QPointF(0, 0)},
+                 {}, false);
+    dxf.polyline(QStringLiteral("0"), {QPointF(300, 100), QPointF(300, 300)}, {}, false); // the edge again
+    for (int letter = 0; letter < 12; ++letter)
+    {
+        const double x = 100 + letter * 6;
+        dxf.polyline(QStringLiteral("0"), {QPointF(x, 250), QPointF(x + 4, 250), QPointF(x + 4, 256), QPointF(x, 256),
+                                           QPointF(x, 250)}, {}, false);
+    }
+    const auto circle = [](const QPointF &center, double radius)
+    {
+        QVector<QPointF> points;
+        for (int i = 0; i <= 24; ++i)
+        {
+            points.append(center + radius * QPointF(std::cos(2 * M_PI * i / 24), std::sin(2 * M_PI * i / 24)));
+        }
+        return points;
+    };
+    dxf.polyline(QStringLiteral("0"), circle(QPointF(300, 200), 3), {}, false); // notch, outside half
+    dxf.polyline(QStringLiteral("0"), circle(QPointF(150, 0), 3), {}, false);   // notch on the bottom
+    dxf.polyline(QStringLiteral("0"), circle(QPointF(200, 400), 5), {}, false); // a snap
+    dxf.polyline(QStringLiteral("0"), {QPointF(150, 60), QPointF(150, 440)}, {}, false);
+    dxf.polyline(QStringLiteral("0"), {QPointF(0, 50), QPointF(12, 50), QPointF(12, 450), QPointF(0, 450)}, {}, false);
+    // A piece number, large but still letter sized next to the piece.
+    dxf.polyline(QStringLiteral("0"), {QPointF(220, 120), QPointF(240, 120), QPointF(240, 145), QPointF(220, 145),
+                                       QPointF(220, 120)}, {}, false);
+    dxf(0, QStringLiteral("ENDSEC"))(0, QStringLiteral("EOF"));
+
+    DxfReader reader;
+    DxfDocument document;
+    QVERIFY(reader.parse(dxf.data(), document));
+    const DxfPattern pattern = DxfPatternReader::extract(document);
+    QCOMPARE(pattern.pieces.size(), 1);
+    const DxfPiece &piece = pattern.pieces.constFirst();
+    QCOMPARE(piece.cutLine.size(), 4);
+    QCOMPARE(piece.notches.size(), 2);
+    QCOMPARE(piece.drillHoles.size(), 1);
+    QVERIFY(piece.hasGrainline);
+    QVERIFY(qAbs(piece.grainline.length() - 380) < 1e-6);
+    QVERIFY(piece.hasMirrorLine);
+    QVERIFY(qAbs(piece.mirrorLine.length() - 400) < 1e-6);
+    QVERIFY2(piece.internalLines.isEmpty(), qPrintable(QString::number(piece.internalLines.size())));
 }
 
 QTEST_MAIN(TST_Seamly3D)

@@ -12,7 +12,7 @@ These are the only changes to existing files:
 |------|--------|
 | `src/libs/libs.pro` | adds the `seamly3d` subdir |
 | `src/app/seamly2d/seamly2d.pro` | `QT += opengl openglwidgets` and links `libseamly3d` |
-| `src/app/seamly2d/mainwindow.cpp` | one include and one `Seamly3D::Workspace3DIntegration::install(...)` call, which passes `LoadPattern` so converted DXF patterns open in the main window |
+| `src/app/seamly2d/mainwindow.cpp` | one include and one `Seamly3D::Workspace3DIntegration::install(...)` call, which passes `LoadPattern` so imported patterns open in the main window |
 | `src/test/test.pro` | adds the `Seamly3DTest` subdir |
 
 `Workspace3DIntegration` finds the host's File, View and Help menus at runtime
@@ -52,7 +52,7 @@ context on Windows, macOS and Linux.
 | `ClothSimulator`, `BodyCollider` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
 | `Workspace3DIntegration` | The single hook into the 2D main window. |
-| `DxfReader`, `DxfPatternReader` (`dxfimport/`) | Reads ASCII DXF (blocks, polylines with arcs, splines, ellipses, text) and finds the pattern pieces: AAMA/ASTM layers, or closed outlines. |
+| `DxfReader`, `SvgReader`, `DxfPatternReader` (`dxfimport/`) | Reads ASCII DXF (blocks, polylines with arcs, splines, ellipses, text) and SVG (paths, shapes, transforms, `<use>`, text, real-world units), and finds the pattern pieces: AAMA/ASTM layers, or closed outlines. |
 | `OutlineFitter`, `DxfPatternConverter`, `DxfImportWizard` (`dxfimport/`) | Fits outlines with corners, lines and smooth curves, writes them as a parametric Seamly2D pattern (`.val`), and the wizard around it. |
 | `MakeHumanData`, `MakeHumanBody`, `MakeHumanFitter` (`makehuman/`) | Realistic body: MakeHuman's base mesh and targets, fitted to the measurements. AGPL port, see `makehuman/README.md`. |
 
@@ -183,21 +183,31 @@ Not there yet: collars and waistbands sewn to necklines (pieces hung beside
 the body are not sewn), self collision (cloth folding through itself), fabric
 presets, and editing the seams by hand.
 
-### Importing DXF patterns
+### Importing SVG and DXF patterns
 
-**File > Import DXF Pattern...** converts a DXF pattern into a parametric
-Seamly2D pattern and opens it. It reads AAMA / ASTM D6673 files, which most
+**File > Import SVG or DXF Pattern...** converts a pattern drawing into a
+parametric Seamly2D pattern and opens it. It reads SVG (FreeSewing and other
+pattern sites, Inkscape, Illustrator), AAMA / ASTM D6673 DXF files, which most
 pattern CAD systems export (Gerber, Lectra, Optitex, CLO, Seamly2D...), and
-any other DXF drawing of pattern pieces.
+any other DXF drawing of pattern pieces. The file's content decides which
+reader is used, not its name.
 
 * **What it reads:** one piece per block. Cut line (layer 1), turn points (2),
   curve points (3), notches (4), mirror or fold line (6), grain line (7),
   internal lines (8, 11), drill holes (13), sew line (14), and texts such as
   `Piece Name:` and `Quantity:`. Units come from `UNITS:` in the file, then
   from `$INSUNITS`, otherwise they are guessed from the size of the pieces.
-  For a plain DXF, every outermost closed outline is a piece. An outline
-  running parallel inside it is its sew line, and anything else inside is an
-  internal line. Lines and curves drawn end to end are joined.
+  For SVG and plain DXF, every outermost closed outline is a piece. An outline
+  running parallel inside it is its sew line. Lines and curves drawn end to
+  end are joined. SVG is scaled to real size from its width, height and
+  viewBox (96 pixels per inch without units).
+* **Drawings without layers** (SVG, or DXF exported from a PDF) are sorted
+  out by shape. Small circles centered on the edge are notches. Isolated
+  small circles inside are drill holes (buttons, snaps). The longest straight
+  line is the grain line, and a bracket along the edge marks a fold. Letters
+  drawn as outlines, text frames, logos and edges drawn twice are left out.
+  Real text names the piece and gives its quantity ("Back", "Cut 2 from main
+  fabric", "Cut on fold").
 * **What it makes:** each piece gets its own draft block. Its first corner is
   a base point, and every other point sits at a length and an angle from the
   point before it (or from the base point, if you choose that). So you can
@@ -216,7 +226,8 @@ any other DXF drawing of pattern pieces.
 * **The wizard:** choose the file, check the pieces and their names (with a
   preview of each converted piece), choose units and options, then pick
   where to save. The pattern opens when you're done.
-* Binary DXF isn't supported: save it as ASCII DXF first.
+* Binary DXF isn't supported: save it as ASCII DXF first. Patterns split
+  across printed pages (tiled PDFs) have to be assembled first.
 
 ### How to measure
 
