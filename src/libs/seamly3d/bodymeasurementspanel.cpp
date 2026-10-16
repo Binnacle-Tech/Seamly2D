@@ -26,9 +26,12 @@
 
 #include "bodymeasurementspanel.h"
 
+#include "measurementguide.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDoubleSpinBox>
+#include <QEvent>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -53,8 +56,9 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     , m_genderComboBox(new QComboBox(this))
     , m_muscleSlider(new QSlider(Qt::Horizontal, this))
     , m_ageSpinBox(new QSpinBox(this))
-    , m_proportionalCheckBox(new QCheckBox(tr("Scale lengths with height"), this))
+    , m_proportionalCheckBox(new QCheckBox(tr("Scale everything with height"), this))
     , m_sourceLabel(new QLabel(this))
+    , m_guide(new MeasurementGuideWidget(170, this))
 {
     auto *layout = new QVBoxLayout(this);
 
@@ -63,7 +67,7 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     connect(loadButton, &QPushButton::clicked, this, &BodyMeasurementsPanel::loadVitFile);
 
     auto *resetButton = new QPushButton(tr("Reset"), this);
-    resetButton->setToolTip(tr("Go back to the default body"));
+    resetButton->setToolTip(tr("Go back to the default measurements for the body shape"));
     connect(resetButton, &QPushButton::clicked, this, &BodyMeasurementsPanel::resetToDefaults);
 
     auto *buttons = new QHBoxLayout;
@@ -81,7 +85,8 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     connect(m_unitComboBox, &QComboBox::currentIndexChanged, this, &BodyMeasurementsPanel::unitChanged);
     options->addRow(tr("Units:"), m_unitComboBox);
     m_proportionalCheckBox->setChecked(true);
-    m_proportionalCheckBox->setToolTip(tr("When the height changes, move every height and the arm length with it"));
+    m_proportionalCheckBox->setToolTip(tr("When the height changes, scale every measurement by the same factor: the same body shape at the "
+                                         "new size. Enter the height first, then adjust what differs."));
     options->addRow(m_proportionalCheckBox);
     layout->addLayout(options);
 
@@ -134,6 +139,7 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
             spinBox->setKeyboardTracking(false);
             spinBox->setToolTip(BodyMeasurements::name(measurement));
             connect(spinBox, &QDoubleSpinBox::valueChanged, this, [this, i]() { valueEdited(i); });
+            spinBox->installEventFilter(this); // show how to take the measurement being edited
             m_spinBoxes[i] = spinBox;
             form->addRow(BodyMeasurements::displayName(measurement) + QLatin1Char(':'), spinBox);
         }
@@ -146,6 +152,17 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     scrollArea->setWidgetResizable(true);
     scrollArea->setFrameShape(QFrame::NoFrame);
     layout->addWidget(scrollArea, 1);
+
+    // How to take the measurement being edited.
+    auto *guideBox = new QGroupBox(tr("How to measure"), this);
+    auto *guideLayout = new QVBoxLayout(guideBox);
+    m_guide->setParent(guideBox);
+    guideLayout->addWidget(m_guide);
+    auto *guideButton = new QPushButton(tr("All Measurements..."), guideBox);
+    guideButton->setToolTip(tr("Pictures and descriptions of every measurement"));
+    connect(guideButton, &QPushButton::clicked, this, &BodyMeasurementsPanel::showMeasuringGuide);
+    guideLayout->addWidget(guideButton, 0, Qt::AlignRight);
+    layout->addWidget(guideBox);
 
     updateSpinBoxes();
 }
@@ -199,7 +216,33 @@ void BodyMeasurementsPanel::resetToDefaults()
 {
     m_sourceLabel->setText(tr("Default body. Enter your own measurements below."));
     m_sourceLabel->setToolTip(QString());
-    setMeasurements(BodyMeasurements());
+    BodyMeasurements defaults = BodyMeasurements::defaults(m_measurements.gender());
+    defaults.setMuscle(m_measurements.muscle());
+    defaults.setAge(m_measurements.age());
+    setMeasurements(defaults);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void BodyMeasurementsPanel::showMeasuringGuide()
+{
+    auto *dialog = new MeasurementGuideDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    dialog->showMeasurement(m_guide->measurement());
+    dialog->show();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool BodyMeasurementsPanel::eventFilter(QObject *watched, QEvent *event)
+{
+    if (event->type() == QEvent::FocusIn)
+    {
+        const int index = static_cast<int>(m_spinBoxes.indexOf(qobject_cast<QDoubleSpinBox *>(watched)));
+        if (index >= 0)
+        {
+            m_guide->showMeasurement(static_cast<BodyMeasurement>(index));
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -212,6 +255,7 @@ void BodyMeasurementsPanel::valueEdited(int index)
 
     const auto measurement = static_cast<BodyMeasurement>(index);
     const double centimeters = m_spinBoxes.at(index)->value() * unitFactor();
+    m_guide->showMeasurement(measurement);
 
     if (measurement == BodyMeasurement::Height && m_proportionalCheckBox->isChecked())
     {
@@ -233,7 +277,19 @@ void BodyMeasurementsPanel::buildEdited()
         return;
     }
 
-    m_measurements.setGender(m_genderComboBox->currentData().toDouble());
+    const double gender = m_genderComboBox->currentData().toDouble();
+    if (!qFuzzyCompare(gender + 1, m_measurements.gender() + 1) && m_measurements.hasDefaultValues())
+    {
+        // Still the default body: switch to the defaults of the other gender instead of keeping, say, a female
+        // lowbust on a male body.
+        BodyMeasurements switched = BodyMeasurements::defaults(gender);
+        switched.setMuscle(m_measurements.muscle());
+        switched.setAge(m_measurements.age());
+        m_measurements = switched;
+        updateSpinBoxes();
+    }
+
+    m_measurements.setGender(gender);
     m_measurements.setMuscle(m_muscleSlider->value() / 100.0);
     m_measurements.setAge(m_ageSpinBox->value());
     emit measurementsChanged(m_measurements);

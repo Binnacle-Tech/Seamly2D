@@ -334,6 +334,14 @@ void Workspace3DWindow::createActions()
     viewMenu->addSeparator();
     viewMenu->addAction(gridAction);
 
+    auto *guideAction = new QAction(tr("&How to Measure"), this);
+    guideAction->setShortcut(QKeySequence::HelpContents);
+    guideAction->setToolTip(tr("Where on the body to take each measurement"));
+    connect(guideAction, &QAction::triggered, m_measurementsPanel, &BodyMeasurementsPanel::showMeasuringGuide);
+
+    QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
+    helpMenu->addAction(guideAction);
+
     QToolBar *toolBar = addToolBar(tr("3D Workspace"));
     toolBar->setObjectName(QStringLiteral("Seamly3DWorkspaceToolBar"));
     toolBar->addWidget(new QLabel(tr("Body:"), toolBar));

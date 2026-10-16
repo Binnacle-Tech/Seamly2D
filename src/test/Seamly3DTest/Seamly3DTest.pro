@@ -30,6 +30,9 @@ HEADERS += \
 SOURCES += \
     tst_seamly3d.cpp
 
+# Seamly2D's measurement diagrams, to check that every measurement points at one.
+RESOURCES += ../../libs/vmisc/share/resources/diagrams.qrc
+
 *msvc*:SOURCES += stable.cpp
 
 include(warnings.pri)

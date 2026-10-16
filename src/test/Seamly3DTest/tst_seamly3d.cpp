@@ -189,6 +189,7 @@ private slots:
     void makeHumanFit_data();
     void makeHumanFit();
     void makeHumanFitDefaultMeasurements();
+    void makeHumanFitMaleDefaults();
     void makeHumanTapeMeasuresEverything();
     void readVitBirthDate();
     void sliceByPlane();
@@ -564,6 +565,18 @@ void TST_Seamly3D::measurementNamesAreUnique()
     }
     QCOMPARE(names.size(), BodyMeasurements::count());
 
+    // Every measurement says how to take it, with its number and a diagram that exists.
+    QSet<QString> codes;
+    for (int i = 0; i < BodyMeasurements::count(); ++i)
+    {
+        const auto measurement = static_cast<BodyMeasurement>(i);
+        codes.insert(BodyMeasurements::code(measurement));
+        QVERIFY(!BodyMeasurements::description(measurement).isEmpty());
+        QVERIFY2(QFile::exists(BodyMeasurements::diagram(measurement)),
+                 qPrintable(BodyMeasurements::diagram(measurement)));
+    }
+    QCOMPARE(codes.size(), BodyMeasurements::count());
+
     // The defaults are a consistent body.
     QVERIFY(BodyMeasurements().sanitized() == BodyMeasurements());
 }
@@ -571,16 +584,29 @@ void TST_Seamly3D::measurementNamesAreUnique()
 //---------------------------------------------------------------------------------------------------------------------
 void TST_Seamly3D::scaleToHeight()
 {
+    // 81 inches: every measurement grows with the height, so the body keeps its shape.
+    const double height = 81 * 2.54;
+    const double factor = height / BodyMeasurements::defaultValue(BodyMeasurement::Height);
     BodyMeasurements measurements;
-    measurements.scaleToHeight(BodyMeasurements::defaultValue(BodyMeasurement::Height) * 1.1);
+    measurements.scaleToHeight(height);
 
-    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::WaistHeight),
-                          BodyMeasurements::defaultValue(BodyMeasurement::WaistHeight) * 1.1));
-    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::ArmLength),
-                          BodyMeasurements::defaultValue(BodyMeasurement::ArmLength) * 1.1));
-    // Girths are not lengths: they stay.
-    QCOMPARE(measurements.value(BodyMeasurement::WaistCirc),
-             BodyMeasurements::defaultValue(BodyMeasurement::WaistCirc));
+    QCOMPARE(measurements.value(BodyMeasurement::Height), height);
+    for (const BodyMeasurement measurement : {BodyMeasurement::WaistHeight, BodyMeasurement::ArmLength,
+                                              BodyMeasurement::WaistCirc, BodyMeasurement::ShoulderWidth})
+    {
+        QVERIFY(qFuzzyCompare(measurements.value(measurement), BodyMeasurements::defaultValue(measurement) * factor));
+    }
+
+    // The realistic body for it stays natural: girths fit closely; at this height MakeHuman's tall proportions put
+    // the knee and calf about a centimeter off, which the fitter accepts rather than distort the legs.
+    const MakeHumanFit fit = MakeHumanFitter::fit(measurements);
+    QVERIFY(fit.valid);
+    for (const MakeHumanFit::Entry &entry : fit.entries)
+    {
+        const bool height = BodyMeasurements::group(entry.measurement) == BodyMeasurementGroup::Height;
+        QVERIFY2(!entry.fitted || qAbs(entry.achieved - entry.target) < (height ? 1.5 : 0.3),
+                 qPrintable(BodyMeasurements::name(entry.measurement)));
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -635,9 +661,10 @@ void TST_Seamly3D::readVit()
     QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::Height), 70 * 2.54));
     QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::WaistCirc), 30.5 * 2.54));
 
-    // Formulas are skipped (default stays) and missing heights follow the person's height.
-    QCOMPARE(measurements.value(BodyMeasurement::HipCirc), BodyMeasurements::defaultValue(BodyMeasurement::HipCirc));
+    // Formulas are skipped, and missing measurements follow the person's height (the default body scaled to it).
     const double scale = 70 * 2.54 / BodyMeasurements::defaultValue(BodyMeasurement::Height);
+    QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::HipCirc),
+                          BodyMeasurements::defaultValue(BodyMeasurement::HipCirc) * scale));
     QVERIFY(qFuzzyCompare(measurements.value(BodyMeasurement::KneeHeight),
                           BodyMeasurements::defaultValue(BodyMeasurement::KneeHeight) * scale));
 }
@@ -1001,13 +1028,13 @@ void TST_Seamly3D::makeHumanFit()
 
     QVERIFY2(fit.valid, qPrintable(fit.errorString));
     QVERIFY(fit.mesh.isValid());
-    if (ageYears >= 13)
+    if (ageYears >= 13 && gender < 0.5)
     {
         QVERIFY(fit.unfitted().isEmpty());
     }
     else
     {
-        // A child has no bust: lowbust and bustpoint are left out of the fit.
+        // Children and men have no bust: lowbust and bustpoint are left out of the fit.
         QCOMPARE(fit.unfitted(),
                  QVector<BodyMeasurement>({BodyMeasurement::BustpointHeight, BodyMeasurement::UnderbustCirc}));
     }
@@ -1041,6 +1068,30 @@ void TST_Seamly3D::makeHumanFitDefaultMeasurements()
     {
         QVERIFY(qAbs(modifier) < 0.5); // no reshaping needed
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::makeHumanFitMaleDefaults()
+{
+    const BodyMeasurements male = BodyMeasurements::defaults(1.0);
+    QCOMPARE(male.gender(), 1.0);
+    QVERIFY(male.hasDefaultValues());
+    QVERIFY(male.value(BodyMeasurement::Height) > BodyMeasurements().value(BodyMeasurement::Height));
+    QVERIFY(BodyMeasurements::defaults(0.0) == BodyMeasurements());
+
+    // The default man fits closely without reshaping, and his chest is not pulled in under the pectorals.
+    const MakeHumanFit fit = MakeHumanFitter::fit(male);
+    QVERIFY(fit.valid);
+    QVERIFY2(fit.maxError() < 0.25, qPrintable(QString::number(fit.maxError())));
+    const QStringList names = MakeHumanData::modifierNames();
+    QCOMPARE(fit.modifiers.at(names.indexOf(QStringLiteral("measure-underbust-circ"))), 0.0);
+    QCOMPARE(fit.modifiers.at(names.indexOf(QStringLiteral("breast-trans"))), 0.0);
+
+    // Even with a female lowbust left in the measurements.
+    BodyMeasurements mixed = male;
+    mixed.setValue(BodyMeasurement::UnderbustCirc, 69.5);
+    QCOMPARE(MakeHumanFitter::fit(mixed).modifiers.at(names.indexOf(QStringLiteral("measure-underbust-circ"))),
+             0.0);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

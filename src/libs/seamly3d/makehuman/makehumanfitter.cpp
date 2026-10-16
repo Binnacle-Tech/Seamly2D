@@ -765,12 +765,12 @@ MakeHumanFit MakeHumanFitter::fit(const BodyMeasurements &measurements, const QS
     // Girths decide how clothes fit, so they count fully; landmark heights count half. Every modifier also pays
     // for moving away from zero, so among the bodies that fit, the most natural one wins, and measurements that
     // would need an extreme (distorted) body are matched as far as a natural body allows.
-    // Children have no bust: their lowbust and bustpoint are not measured on the body (the lowbust tape sits under
-    // an adult bust, and pulling it carves a rib line at an adult height into a child).
-    const bool child = m.age() < minBreastAge;
-    const auto ignored = [child](BodyMeasurement measurement)
+    // Lowbust and bustpoint describe a female bust. MakeHuman's lowbust tape and modifier sit under it; on a child or
+    // a man there is no bust, and pulling that tape carves a rib line into the chest. They are left out there.
+    const bool noBust = m.age() < minBreastAge || macros.gender >= 0.5;
+    const auto ignored = [noBust](BodyMeasurement measurement)
     {
-        return child
+        return noBust
                && (measurement == BodyMeasurement::UnderbustCirc || measurement == BodyMeasurement::BustpointHeight);
     };
 
@@ -834,7 +834,7 @@ MakeHumanFit MakeHumanFitter::fit(const BodyMeasurements &measurements, const QS
     {
         free[static_cast<int>(MakeHumanData::modifierNames().indexOf(QStringLiteral("breast-trans")))] = false;
     }
-    if (child)
+    if (noBust)
     {
         free[static_cast<int>(MakeHumanData::modifierNames().indexOf(QStringLiteral("measure-underbust-circ")))] = false;
     }
