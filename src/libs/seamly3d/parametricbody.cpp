@@ -300,6 +300,11 @@ BodyModel ParametricBody::generate(const BodyMeasurements &measurements, int seg
         const QVector3D direction(side * qSin(angle), -qCos(angle), 0);
         const QVector3D u = QVector3D::crossProduct(direction, axisZ).normalized();
         const auto at = [&](float distance) { return origin + direction * distance; };
+        if (side > 0)
+        {
+            model.leftShoulder = origin;
+            model.leftWrist = at(armLength);
+        }
 
         QVector<Ring> arm;
         arm << girthRing(at(0), value(BodyMeasurement::UpperArmCirc) * 1.1f, 1.0, segments, u, axisZ);

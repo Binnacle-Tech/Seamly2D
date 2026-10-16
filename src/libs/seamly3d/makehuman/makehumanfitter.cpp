@@ -930,6 +930,16 @@ MakeHumanFit MakeHumanFitter::fit(const BodyMeasurements &measurements, const QS
     result.macros = macros;
     result.modifiers = toModifiers(x);
     result.mesh = body.mesh(result.scale);
+    result.leftShoulder = result.mesh.positions.at(shoulderTipVertex);
+    {
+        const QVector<int> wrist = MakeHumanBody::ruler(QStringLiteral("measure-wrist-circ"));
+        QVector3D centre;
+        for (const int v : wrist)
+        {
+            centre += result.mesh.positions.at(v);
+        }
+        result.leftWrist = wrist.isEmpty() ? result.leftShoulder : centre / static_cast<float>(wrist.size());
+    }
 
     for (int i = 0; i < BodyMeasurements::count(); ++i)
     {

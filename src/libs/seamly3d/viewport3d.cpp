@@ -138,6 +138,43 @@ const Mesh &Viewport3D::mesh() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void Viewport3D::setOverlays(const QVector<Overlay> &overlays)
+{
+    m_overlays = overlays;
+    for (Overlay &overlay : m_overlays)
+    {
+        if (overlay.mesh.normals.size() != overlay.mesh.positions.size())
+        {
+            overlay.mesh.computeNormals();
+        }
+    }
+    m_overlaysDirty = true;
+    update();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+const QVector<Viewport3D::Overlay> &Viewport3D::overlays() const
+{
+    return m_overlays;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Bounds3D Viewport3D::sceneBounds() const
+{
+    Bounds3D bounds = m_mesh.bounds();
+    for (const Overlay &overlay : m_overlays)
+    {
+        const Bounds3D overlayBounds = overlay.mesh.bounds();
+        if (overlayBounds.valid)
+        {
+            bounds.expand(overlayBounds.minimum);
+            bounds.expand(overlayBounds.maximum);
+        }
+    }
+    return bounds;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 bool Viewport3D::isGridVisible() const
 {
     return m_gridVisible;
@@ -184,7 +221,7 @@ void Viewport3D::resetView()
 //---------------------------------------------------------------------------------------------------------------------
 void Viewport3D::frameAll()
 {
-    m_camera.frame(m_mesh.bounds());
+    m_camera.frame(sceneBounds());
     update();
 }
 
@@ -218,6 +255,7 @@ void Viewport3D::initializeGL()
     m_meshIndices.create();
     m_gridVertices.create();
     m_meshDirty = true;
+    m_overlaysDirty = true;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -236,6 +274,11 @@ void Viewport3D::paintGL()
         uploadMesh();
         uploadGrid();
         m_meshDirty = false;
+    }
+    if (m_overlaysDirty)
+    {
+        uploadOverlays();
+        m_overlaysDirty = false;
     }
 
     const QColor background = palette().color(QPalette::Base);
@@ -261,25 +304,77 @@ void Viewport3D::paintGL()
         m_lineProgram->release();
     }
 
-    if (m_meshIndexCount > 0 && m_meshProgram->isLinked())
+    if (m_meshProgram->isLinked())
     {
-        m_meshProgram->bind();
-        m_meshProgram->setUniformValue("mvp", mvp);
-        m_meshProgram->setUniformValue("normalMatrix", view.normalMatrix());
-        m_meshProgram->setUniformValue("color", m_meshColor);
-        m_meshVertices.bind();
-        m_meshIndices.bind();
-        m_meshProgram->enableAttributeArray(0);
-        m_meshProgram->enableAttributeArray(1);
-        m_meshProgram->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
-        m_meshProgram->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
-        glDrawElements(GL_TRIANGLES, m_meshIndexCount, GL_UNSIGNED_INT, nullptr);
-        m_meshProgram->disableAttributeArray(1);
-        m_meshProgram->disableAttributeArray(0);
-        m_meshIndices.release();
-        m_meshVertices.release();
-        m_meshProgram->release();
+        drawMesh(mvp, view, m_meshVertices, m_meshIndices, m_meshIndexCount, m_meshColor);
+        for (int i = 0; i < m_overlayBuffers.size() && i < m_overlays.size(); ++i)
+        {
+            GpuMesh &gpu = m_overlayBuffers[i];
+            drawMesh(mvp, view, gpu.vertices, gpu.indices, gpu.indexCount, m_overlays.at(i).color);
+        }
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Viewport3D::drawMesh(const QMatrix4x4 &mvp, const QMatrix4x4 &view, QOpenGLBuffer &vertices,
+                          QOpenGLBuffer &indices, int indexCount, const QColor &color)
+{
+    if (indexCount <= 0)
+    {
+        return;
+    }
+
+    m_meshProgram->bind();
+    m_meshProgram->setUniformValue("mvp", mvp);
+    m_meshProgram->setUniformValue("normalMatrix", view.normalMatrix());
+    m_meshProgram->setUniformValue("color", color);
+    vertices.bind();
+    indices.bind();
+    m_meshProgram->enableAttributeArray(0);
+    m_meshProgram->enableAttributeArray(1);
+    m_meshProgram->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
+    m_meshProgram->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
+    glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, nullptr);
+    m_meshProgram->disableAttributeArray(1);
+    m_meshProgram->disableAttributeArray(0);
+    indices.release();
+    vertices.release();
+    m_meshProgram->release();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Viewport3D::uploadOverlays()
+{
+    destroyOverlayBuffers();
+    m_overlayBuffers.resize(m_overlays.size());
+    for (int i = 0; i < m_overlays.size(); ++i)
+    {
+        const Mesh &mesh = m_overlays.at(i).mesh;
+        GpuMesh &gpu = m_overlayBuffers[i];
+        gpu.vertices.create();
+        gpu.indices.create();
+
+        const QVector<float> vertexData = mesh.interleavedVertexData();
+        gpu.vertices.bind();
+        gpu.vertices.allocate(vertexData.constData(), static_cast<int>(vertexData.size() * sizeof(float)));
+        gpu.vertices.release();
+
+        gpu.indices.bind();
+        gpu.indices.allocate(mesh.indices.constData(), static_cast<int>(mesh.indices.size() * sizeof(quint32)));
+        gpu.indices.release();
+        gpu.indexCount = static_cast<int>(mesh.indices.size());
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Viewport3D::destroyOverlayBuffers()
+{
+    for (GpuMesh &gpu : m_overlayBuffers)
+    {
+        gpu.vertices.destroy();
+        gpu.indices.destroy();
+    }
+    m_overlayBuffers.clear();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -359,6 +454,8 @@ void Viewport3D::cleanupGL()
     m_meshVertices.destroy();
     m_meshIndices.destroy();
     m_gridVertices.destroy();
+    destroyOverlayBuffers();
+    m_overlaysDirty = true;
     m_meshProgram.reset();
     m_lineProgram.reset();
     doneCurrent();

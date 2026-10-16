@@ -27,6 +27,8 @@
 #include <QBuffer>
 #include <QDate>
 #include <QElapsedTimer>
+#include <QSignalSpy>
+#include <QVector2D>
 #include <QtTest>
 
 #include "bodymeasurements.h"
@@ -38,6 +40,10 @@
 #include "objmeshwriter.h"
 #include "orbitcamera.h"
 #include "parametricbody.h"
+#include "patternpiecespanel.h"
+#include "patternprovider.h"
+#include "piecearrangement.h"
+#include "piecemesher.h"
 #include "polygontriangulator.h"
 
 using namespace Seamly3D;
@@ -193,6 +199,14 @@ private slots:
     void makeHumanTapeMeasuresEverything();
     void readVitBirthDate();
     void sliceByPlane();
+
+    void pieceMesherKeepsShape();
+    void pieceMesherEdgeLength();
+    void arrangementGuess_data();
+    void arrangementGuess();
+    void arrangementWrapsAroundBody();
+    void arrangementPairs();
+    void piecesPanelFromProvider();
     void makeHumanFitUnreachable();
     void makeHumanGenderChangesShape();
 };
@@ -1198,5 +1212,207 @@ void TST_Seamly3D::makeHumanGenderChangesShape()
     QVERIFY(difference > 1.0); // centimeters
 }
 
-QTEST_GUILESS_MAIN(TST_Seamly3D)
+//---------------------------------------------------------------------------------------------------------------------
+namespace
+{
+QPolygonF bodicePiece()
+{
+    // A simple bodice front, 25 x 45 cm, with a curved armhole and neckline, in pattern coordinates (Y down).
+    QPolygonF piece;
+    piece << QPointF(0, 0) << QPointF(8, 0) << QPointF(20, 4);
+    for (int i = 0; i <= 8; ++i)
+    {
+        const double a = M_PI / 2 * i / 8;
+        piece << QPointF(20 + 5 * std::sin(a), 4 + 14 * (1 - std::cos(a)));
+    }
+    piece << QPointF(25, 45) << QPointF(0, 45);
+    return piece;
+}
+
+double meshArea(const Mesh &mesh)
+{
+    double area = 0;
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        const QVector3D a = mesh.positions.at(static_cast<int>(mesh.indices.at(i)));
+        const QVector3D b = mesh.positions.at(static_cast<int>(mesh.indices.at(i + 1)));
+        const QVector3D c = mesh.positions.at(static_cast<int>(mesh.indices.at(i + 2)));
+        area += static_cast<double>(QVector3D::crossProduct(b - a, c - a).length()) / 2;
+    }
+    return area;
+}
+
+class FakeProvider : public PatternProvider
+{
+public:
+    QVector<PatternPiece> pieces(QString *) override { return m_pieces; }
+    QStringList applyMeasurements(BodyMeasurements &) override { return {}; }
+    QMetaObject::Connection watch(QObject *, const std::function<void()> &) override { return {}; }
+
+    QVector<PatternPiece> m_pieces;
+};
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::pieceMesherKeepsShape()
+{
+    const QPolygonF outline = bodicePiece();
+    const Mesh mesh = PieceMesher::mesh(outline, 2.5);
+    QVERIFY(mesh.isValid());
+    QVERIFY(mesh.triangleCount() > 100);
+
+    // Same area as the outline, and a closed surface edge-wise (no T-junctions: every inner edge has two sides).
+    QVERIFY(qAbs(meshArea(mesh) - qAbs(PolygonTriangulator::signedArea(outline))) < 1e-3);
+    QHash<QPair<quint32, quint32>, int> edges;
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            ++edges[qMakePair(mesh.indices.at(i + k), mesh.indices.at(i + (k + 1) % 3))];
+        }
+    }
+    for (auto it = edges.constBegin(); it != edges.constEnd(); ++it)
+    {
+        QVERIFY(it.value() == 1); // consistent winding
+    }
+    const Bounds3D bounds = mesh.bounds();
+    QVERIFY(qFuzzyIsNull(bounds.minimum.x()) && qFuzzyCompare(bounds.maximum.y(), 45.0f));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::pieceMesherEdgeLength()
+{
+    const Mesh mesh = PieceMesher::mesh(bodicePiece(), 2.5);
+    for (int i = 0; i + 2 < mesh.indices.size(); i += 3)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            const QVector3D a = mesh.positions.at(static_cast<int>(mesh.indices.at(i + k)));
+            const QVector3D b = mesh.positions.at(static_cast<int>(mesh.indices.at(i + (k + 1) % 3)));
+            QVERIFY((a - b).length() <= 2.5f + 1e-4f);
+        }
+    }
+    QVERIFY(PieceMesher::mesh(QPolygonF(), 2.5).isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementGuess_data()
+{
+    QTest::addColumn<QString>("name");
+    QTest::addColumn<int>("placement");
+    QTest::newRow("front") << "Front bodice" << static_cast<int>(PiecePlacement::Front);
+    QTest::newRow("back") << "Back" << static_cast<int>(PiecePlacement::Back);
+    QTest::newRow("sleeve") << "Sleeve" << static_cast<int>(PiecePlacement::LeftSleeve);
+    QTest::newRow("german back") << "Rückenteil" << static_cast<int>(PiecePlacement::Back);
+    QTest::newRow("collar") << "Collar" << static_cast<int>(PiecePlacement::Aside);
+    QTest::newRow("unknown") << "Piece 7" << static_cast<int>(PiecePlacement::Aside);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementGuess()
+{
+    QFETCH(QString, name);
+    QFETCH(int, placement);
+    QCOMPARE(static_cast<int>(PieceArrangement::guess(name)), placement);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementWrapsAroundBody()
+{
+    const QPolygonF outline = bodicePiece();
+    const Mesh flat = PieceMesher::mesh(outline, 2.5);
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+
+    const QVector<Mesh> front = PieceArrangement::place(flat, outline.boundingRect(), PiecePlacement::Front, false,
+                                                        false, frame);
+    QCOMPARE(front.size(), 1);
+    // In front of the body, at the torso radius, top at the neck.
+    QVERIFY(front.constFirst().bounds().maximum.z() > frame.torsoRadius * 0.9f);
+    QVERIFY(qAbs(front.constFirst().bounds().maximum.y() - frame.neckHeight) < 1e-3f);
+    for (const QVector3D &p : front.constFirst().positions)
+    {
+        QVERIFY(qAbs(QVector2D(p.x(), p.z()).length() - frame.torsoRadius) < 1e-3f);
+    }
+
+    // Bending does not stretch: the area stays the piece's area (within the error of the cylinder's chords).
+    QVERIFY(qAbs(meshArea(front.constFirst()) - meshArea(flat)) / meshArea(flat) < 0.01);
+
+    const QVector<Mesh> back = PieceArrangement::place(flat, outline.boundingRect(), PiecePlacement::Back, false,
+                                                       false, frame);
+    QVERIFY(back.constFirst().bounds().maximum.z() < 0.0f);
+
+    QVERIFY(PieceArrangement::place(flat, outline.boundingRect(), PiecePlacement::Hidden, true, false, frame)
+                .isEmpty());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementPairs()
+{
+    const QPolygonF outline = bodicePiece();
+    const Mesh flat = PieceMesher::mesh(outline, 2.5);
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+
+    // A half front on the fold: the two halves meet at the center line and mirror each other.
+    const QVector<Mesh> front = PieceArrangement::place(flat, outline.boundingRect(), PiecePlacement::Front, true,
+                                                        false, frame);
+    QCOMPARE(front.size(), 2);
+    QVERIFY(qAbs(front.at(0).bounds().minimum.x()) < 1e-3f);
+    QVERIFY(qAbs(front.at(1).bounds().maximum.x()) < 1e-3f);
+    QVERIFY(qAbs(front.at(0).bounds().maximum.x() + front.at(1).bounds().minimum.x()) < 1e-3f);
+
+    // Sleeves cut twice: one each side.
+    const QVector<Mesh> sleeves = PieceArrangement::place(flat, outline.boundingRect(), PiecePlacement::LeftSleeve,
+                                                          true, false, frame);
+    QCOMPARE(sleeves.size(), 2);
+    QVERIFY(sleeves.at(0).bounds().center().x() > frame.torsoRadius);
+    QVERIFY(sleeves.at(1).bounds().center().x() < -frame.torsoRadius);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::piecesPanelFromProvider()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    PatternPiece front;
+    front.id = 3;
+    front.name = QStringLiteral("Front");
+    front.seamLine = bodicePiece();
+    front.onFold = true;
+    PatternPiece sleeve;
+    sleeve.id = 5;
+    sleeve.name = QStringLiteral("Sleeve");
+    sleeve.seamLine = bodicePiece();
+    sleeve.quantity = 2;
+    PatternPiece pocket;
+    pocket.id = 7;
+    pocket.name = QStringLiteral("Pocket");
+    pocket.seamLine = bodicePiece();
+    provider->m_pieces = {front, sleeve, pocket};
+
+    PatternPiecesPanel panel;
+    QSignalSpy changed(&panel, &PatternPiecesPanel::arrangementChanged);
+    panel.setProvider(provider);
+    QVERIFY(changed.count() >= 1);
+    QCOMPARE(panel.pieces().size(), 3);
+
+    // Guessed placements, pairs for pieces cut twice or on the fold.
+    QCOMPARE(panel.settings(3).placement, PiecePlacement::Front);
+    QVERIFY(panel.settings(3).pair);
+    QCOMPARE(panel.settings(5).placement, PiecePlacement::LeftSleeve);
+    QVERIFY(panel.settings(5).pair);
+    QCOMPARE(panel.settings(7).placement, PiecePlacement::Aside);
+    QVERIFY(!panel.settings(7).pair);
+
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+    QCOMPARE(panel.overlays(frame).size(), 5); // 2 fronts, 2 sleeves, 1 pocket
+
+    // Settings survive a reload (the pattern changed in 2D), and hidden pieces are not shown.
+    PatternPiecesPanel::Settings hidden = panel.settings(7);
+    hidden.placement = PiecePlacement::Hidden;
+    panel.setSettings(7, hidden);
+    panel.reload();
+    QCOMPARE(panel.settings(7).placement, PiecePlacement::Hidden);
+    QCOMPARE(panel.overlays(frame).size(), 4);
+}
+
+QTEST_MAIN(TST_Seamly3D)
 #include "tst_seamly3d.moc"

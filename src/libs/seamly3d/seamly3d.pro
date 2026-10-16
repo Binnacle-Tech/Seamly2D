@@ -11,7 +11,8 @@
 message("Entering seamly3d.pro")
 include(../../../common.pri)
 
-QT += core gui widgets opengl openglwidgets
+# xml and printsupport: the 2D headers patternsource.cpp reads the open pattern through need them.
+QT += core gui widgets opengl openglwidgets xml printsupport
 
 # Name of library
 TARGET = seamly3d
@@ -38,3 +39,6 @@ MOC_DIR = moc
 OBJECTS_DIR = obj
 
 include(warnings.pri)
+
+# Include paths of the Seamly2D libraries (only patternsource.cpp uses them).
+include(../libs.pri)

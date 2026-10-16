@@ -31,6 +31,7 @@
 #include <QPointer>
 
 class QAction;
+class QDockWidget;
 class QMainWindow;
 
 namespace Seamly3D
@@ -41,9 +42,10 @@ class Workspace3DWindow;
 /**
  * @brief The single integration point between the 2D application and the 3D workspace.
  *
- * Call Workspace3DIntegration::install() once from the host main window. It adds a "3D Workspace" action to the host's
- * View menu (falling back to the menu bar) and owns the lazily created 3D window. No other 2D code needs to know about
- * the 3D workspace.
+ * Call Workspace3DIntegration::install() once from the host main window. It adds a "3D Workspace" toggle to the host's
+ * View menu (falling back to the menu bar) and "How to Measure (Body)" to its Help menu. The 3D workspace opens as a
+ * dock of the main window, next to the 2D pattern (it can be floated out); it is created on first use. No other 2D code
+ * needs to know about the 3D workspace.
  */
 class Workspace3DIntegration : public QObject
 {
@@ -57,6 +59,7 @@ public:
 
 public slots:
     void showWorkspace();
+    void setWorkspaceVisible(bool visible);
 
 private:
     explicit Workspace3DIntegration(QMainWindow *host);
@@ -65,6 +68,7 @@ private:
     QMainWindow                 *m_host;
     QAction                     *m_action;
     QPointer<Workspace3DWindow>  m_window{};
+    QPointer<QDockWidget>        m_dock{};
 };
 
 } // namespace Seamly3D

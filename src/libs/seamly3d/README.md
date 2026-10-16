@@ -15,9 +15,14 @@ These are the only changes to existing files:
 | `src/app/seamly2d/mainwindow.cpp` | one include and one `Seamly3D::Workspace3DIntegration::install(this)` call |
 | `src/test/test.pro` | adds the `Seamly3DTest` subdir |
 
-`Workspace3DIntegration` finds the host's View menu at runtime by object name
-(`view_Menu`) and adds a **3D Workspace** action to it, so `mainwindow.ui`
-doesn't change.
+`Workspace3DIntegration` finds the host's View and Help menus at runtime by
+object name (`view_Menu`, `help_Menu`), so `mainwindow.ui` doesn't change.
+**View > 3D Workspace** shows the workspace as a dock of the main window,
+beside the 2D pattern. You can float it out to its own window or screen.
+
+`patternsource.cpp` is the only 3D file that reads 2D data. It reads the open
+pattern through the application's current data container (pieces,
+measurements) and document (change notifications). It never writes to them.
 
 ## Dependencies
 
@@ -40,6 +45,9 @@ context on Windows, macOS and Linux.
 | `OrbitCamera` | Y-up turntable camera: orbit, pan, zoom, frame bounds. |
 | `Viewport3D` | `QOpenGLWidget` that draws the shaded mesh and a ground grid. Left drag orbits, Shift/right/middle drag pans, the wheel zooms. |
 | `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body. |
+| `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
+| `PieceMesher`, `PieceArrangement`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body, and the panel to arrange them. |
+| `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
 | `Workspace3DIntegration` | The single hook into the 2D main window. |
 
 | `MakeHumanData`, `MakeHumanBody`, `MakeHumanFitter` (`makehuman/`) | Realistic body: MakeHuman's base mesh and targets, fitted to the measurements. AGPL port, see `makehuman/README.md`. |
@@ -122,6 +130,27 @@ body. Joins at the shoulders and crotch are visible, there are
 no feet or fingers, and front/back and left/right asymmetry, posture and bust
 shape are not modeled. The roadmap covers these.
 
+### Pattern pieces
+
+The **Pattern Pieces** tab lists the pieces of the open pattern that are in
+the layout, and shows them around the body as the starting shape for sewing
+and draping:
+
+* Each piece becomes an even triangle mesh (2.5 cm), wrapped without
+  stretching around a cylinder just outside the body (front, back, sides),
+  or around the arm for sleeves, from the shoulder tip toward the wrist.
+  Collars, pockets and other pieces hang flat beside the body.
+* Where a piece goes is guessed from its name (front, back, sleeve, collar...,
+  also in German, French, Spanish, Dutch and Italian). You can change it per
+  piece, or hide the piece.
+* **Pair:** a piece cut twice or on the fold gets a mirrored copy, on the
+  other side of the center line or on the other arm. **Flip** mirrors the
+  piece when its center line is on the other side.
+* **Follow pattern changes** updates the pieces while you edit the pattern in
+  2D, and keeps each piece's settings.
+* **Use Pattern's Measurements** fits the body to the measurement file the
+  pattern uses.
+
 ### How to measure
 
 The **How to measure** box under the measurement fields shows the Seamly2D
@@ -169,11 +198,12 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [ ] Units for imported models, and fitting an imported scan to measurements
    - [ ] Poses through a skeleton, so garments can be checked in motion
 2. **Pattern pieces in 3D**
-   - [x] Triangulate piece outlines (`PolygonTriangulator`)
-   - [ ] Read-only adapter that gets piece outlines and seam lines from the open
-     pattern, without changing 2D code
-   - [ ] Arrangement points around the avatar (front, back, sleeves), with
-     pieces wrapped on cylinders as a starting shape
+   - [x] Triangulate piece outlines (`PolygonTriangulator`, `PieceMesher`)
+   - [x] Read-only adapter that gets the pieces and measurements of the open
+     pattern (`PatternSource`)
+   - [x] Arrangement around the avatar (front, back, sides, sleeves along the
+     arms, pieces beside the body), pairs for pieces cut twice or on the fold
+   - [ ] Drag pieces in 3D; use grainlines and notches for orientation
 3. **Sewing**
    - [ ] Seams between piece edges (one to one and one to many), drawn on the
      2D pieces, with notches as alignment hints

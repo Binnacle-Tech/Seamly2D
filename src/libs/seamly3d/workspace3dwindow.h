@@ -30,6 +30,8 @@
 #include <QMainWindow>
 #include <QString>
 
+#include <memory>
+
 #include "makehuman/makehumanfitter.h"
 #include "parametricbody.h"
 
@@ -43,6 +45,8 @@ namespace Seamly3D
 {
 
 class BodyMeasurementsPanel;
+class PatternPiecesPanel;
+class PatternProvider;
 class Viewport3D;
 
 /**
@@ -67,6 +71,10 @@ public:
     bool        loadBodyModel(const QString &fileName);
     void        setBodyMeasurements(const BodyMeasurements &measurements);
 
+    /** @brief setPatternProvider shows that pattern's pieces around the body (the application gives the open one). */
+    void        setPatternProvider(const std::shared_ptr<PatternProvider> &provider);
+    PatternPiecesPanel *piecesPanel() const;
+
 public slots:
     void        importBodyModel();
     void        exportBodyModel();
@@ -74,6 +82,8 @@ public slots:
 
 private slots:
     void        regenerateBody();
+    void        updatePieces();
+    void        usePatternMeasurements();
 
 private:
     Q_DISABLE_COPY_MOVE(Workspace3DWindow)
@@ -90,6 +100,8 @@ private:
 
     Viewport3D            *m_viewport;
     BodyMeasurementsPanel *m_measurementsPanel;
+    PatternPiecesPanel    *m_piecesPanel;
+    std::shared_ptr<PatternProvider> m_provider{};
     QLabel                *m_statusLabel;
     QTimer                *m_regenerateTimer;
     QComboBox             *m_bodyKindComboBox;

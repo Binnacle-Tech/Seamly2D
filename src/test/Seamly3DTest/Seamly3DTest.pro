@@ -6,7 +6,7 @@
 
 include(../../../common.pri)
 
-QT       += core gui testlib widgets opengl openglwidgets
+QT       += core gui testlib widgets opengl openglwidgets xml printsupport
 
 TARGET = Seamly3DTest
 

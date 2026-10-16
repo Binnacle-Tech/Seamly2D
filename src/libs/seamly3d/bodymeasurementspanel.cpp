@@ -186,6 +186,15 @@ void BodyMeasurementsPanel::setMeasurements(const BodyMeasurements &measurements
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+void BodyMeasurementsPanel::setMeasurements(const BodyMeasurements &measurements, const QString &source,
+                                            const QString &details)
+{
+    m_sourceLabel->setText(source);
+    m_sourceLabel->setToolTip(details);
+    setMeasurements(measurements);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 void BodyMeasurementsPanel::loadVitFile()
 {
     const QString filter = tr("Individual measurements (*.vit);;All files (*)");

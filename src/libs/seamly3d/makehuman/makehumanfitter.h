@@ -122,6 +122,8 @@ struct MakeHumanFit
     MakeHumanMacros macros{};
     QVector<double> modifiers{};       ///< in MakeHumanData::modifierNames() order
     double          scale{1.0};        ///< uniform scale applied on top of the height macro
+    QVector3D       leftShoulder{};    ///< Left shoulder tip on the fitted mesh (centimeters)
+    QVector3D       leftWrist{};       ///< Left wrist (center of the wrist loop) on the fitted mesh
     QVector<Entry>  entries{};
 
     /** @brief worst absolute difference between target and achieved over the fitted measurements. */

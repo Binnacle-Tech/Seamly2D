@@ -61,6 +61,9 @@ public:
 
     BodyMeasurements measurements() const;
     void             setMeasurements(const BodyMeasurements &measurements);
+    /** @brief setMeasurements also says where they come from, e.g. "The pattern's measurements". */
+    void             setMeasurements(const BodyMeasurements &measurements, const QString &source,
+                                     const QString &details = QString());
 
 signals:
     void measurementsChanged(const Seamly3D::BodyMeasurements &measurements);

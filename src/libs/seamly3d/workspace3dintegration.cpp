@@ -27,11 +27,14 @@
 #include "workspace3dintegration.h"
 
 #include <QAction>
+#include <QDockWidget>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QSignalBlocker>
 
 #include "measurementguide.h"
+#include "patternsource.h"
 #include "workspace3dwindow.h"
 
 namespace
@@ -68,8 +71,9 @@ Workspace3DIntegration::Workspace3DIntegration(QMainWindow *host)
     , m_action(new QAction(tr("3D Workspace"), this))
 {
     m_action->setObjectName(QStringLiteral("seamly3dWorkspace_Action"));
-    m_action->setToolTip(tr("Open the 3D workspace"));
-    connect(m_action, &QAction::triggered, this, &Workspace3DIntegration::showWorkspace);
+    m_action->setToolTip(tr("Show or hide the 3D workspace"));
+    m_action->setCheckable(true);
+    connect(m_action, &QAction::toggled, this, &Workspace3DIntegration::setWorkspaceVisible);
 
     if (auto *viewMenu = host->findChild<QMenu *>(hostViewMenuName))
     {
@@ -114,15 +118,47 @@ Workspace3DWindow *Workspace3DIntegration::window() const
 //---------------------------------------------------------------------------------------------------------------------
 void Workspace3DIntegration::showWorkspace()
 {
-    if (m_window.isNull())
+    m_action->setChecked(true);
+    setWorkspaceVisible(true);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DIntegration::setWorkspaceVisible(bool visible)
+{
+    if (m_dock.isNull())
     {
-        // Parented to the host so it closes with the application; it is still its own top level window.
-        m_window = new Workspace3DWindow(m_host);
+        if (!visible)
+        {
+            return;
+        }
+
+        // A dock of the main window, beside the 2D pattern; it can be floated out to a screen of its own.
+        m_dock = new QDockWidget(tr("3D Workspace"), m_host);
+        m_dock->setObjectName(QStringLiteral("seamly3dWorkspace_Dock"));
+        m_window = new Workspace3DWindow(m_dock);
+        m_window->setWindowFlags(Qt::Widget);
+        m_window->setPatternProvider(std::make_shared<OpenPatternProvider>());
+        m_dock->setWidget(m_window);
+        m_host->addDockWidget(Qt::RightDockWidgetArea, m_dock);
+        m_host->resizeDocks({m_dock}, {m_host->width() / 2}, Qt::Horizontal);
+
+        // Closing the dock with its own button unchecks View > 3D Workspace.
+        connect(m_dock, &QDockWidget::visibilityChanged, this,
+                [this](bool shown)
+                {
+                    if (!shown && !m_dock->isVisible())
+                    {
+                        const QSignalBlocker blocker(m_action);
+                        m_action->setChecked(false);
+                    }
+                });
     }
 
-    m_window->show();
-    m_window->raise();
-    m_window->activateWindow();
+    m_dock->setVisible(visible);
+    if (visible)
+    {
+        m_dock->raise();
+    }
 }
 
 } // namespace Seamly3D

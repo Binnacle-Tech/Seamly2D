@@ -48,6 +48,9 @@
 #include "meshslicer.h"
 #include "objmeshreader.h"
 #include "objmeshwriter.h"
+#include "patternpiecespanel.h"
+#include "patternprovider.h"
+#include "piecearrangement.h"
 #include "viewport3d.h"
 
 namespace Seamly3D
@@ -58,6 +61,7 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     : QMainWindow(parent, Qt::Window)
     , m_viewport(new Viewport3D(this))
     , m_measurementsPanel(new BodyMeasurementsPanel(this))
+    , m_piecesPanel(new PatternPiecesPanel(this))
     , m_statusLabel(new QLabel(this))
     , m_regenerateTimer(new QTimer(this))
     , m_bodyKindComboBox(new QComboBox(this))
@@ -71,6 +75,16 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     dock->setObjectName(QStringLiteral("Seamly3DBodyMeasurementsDock"));
     dock->setWidget(m_measurementsPanel);
     addDockWidget(Qt::RightDockWidgetArea, dock);
+
+    auto *piecesDock = new QDockWidget(tr("Pattern Pieces"), this);
+    piecesDock->setObjectName(QStringLiteral("Seamly3DPatternPiecesDock"));
+    piecesDock->setWidget(m_piecesPanel);
+    addDockWidget(Qt::RightDockWidgetArea, piecesDock);
+    tabifyDockWidget(dock, piecesDock);
+    dock->raise();
+    connect(m_piecesPanel, &PatternPiecesPanel::arrangementChanged, this, &Workspace3DWindow::updatePieces);
+    connect(m_piecesPanel, &PatternPiecesPanel::useMeasurementsRequested, this,
+            &Workspace3DWindow::usePatternMeasurements);
 
     // Spin box edits arrive one at a time; regenerate once they settle.
     m_regenerateTimer->setSingleShot(true);
@@ -108,6 +122,62 @@ Workspace3DWindow::~Workspace3DWindow()
         m_fitThread->wait();
         delete m_fitThread;
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::setPatternProvider(const std::shared_ptr<PatternProvider> &provider)
+{
+    m_provider = provider;
+    m_piecesPanel->setProvider(provider);
+    if (provider != nullptr && !m_piecesPanel->pieces().isEmpty())
+    {
+        m_viewport->frameAll();
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+PatternPiecesPanel *Workspace3DWindow::piecesPanel() const
+{
+    return m_piecesPanel;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::updatePieces()
+{
+    // Pieces wrap around the measured body; an imported model has no measurements, so they use the panel's.
+    BodyFrame frame = BodyFrame::fromMeasurements(m_measurementsPanel->measurements());
+    if (m_source == BodySource::Parametric)
+    {
+        // Sleeves follow the arm of the body shown: its pose depends on the body.
+        frame = bodyKind() == BodyKind::Realistic && m_fit.valid ? frame.withArm(m_fit.leftShoulder, m_fit.leftWrist)
+                                                                  : frame.withArm(m_body.leftShoulder, m_body.leftWrist);
+    }
+    m_viewport->setOverlays(m_piecesPanel->overlays(frame));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::usePatternMeasurements()
+{
+    if (m_provider == nullptr)
+    {
+        return;
+    }
+
+    BodyMeasurements measurements = m_measurementsPanel->measurements();
+    const QStringList applied = m_provider->applyMeasurements(measurements);
+    if (applied.isEmpty())
+    {
+        QMessageBox::information(this, tr("Use pattern's measurements"),
+                                 tr("The pattern has none of the body measurements the 3D body uses. Load a "
+                                    "measurement file for the pattern in Seamly2D first."));
+        return;
+    }
+
+    m_measurementsPanel->setMeasurements(
+        measurements,
+        tr("The pattern's measurements: %n used, the rest estimated from the height.", "",
+           static_cast<int>(applied.size())),
+        applied.join(QLatin1String(", ")));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -216,6 +286,7 @@ void Workspace3DWindow::buildBody(bool frame)
 
     m_body = ParametricBody::generate(m_measurementsPanel->measurements());
     m_viewport->setMesh(m_body.combined(), frame);
+    updatePieces();
     updateStatus();
 }
 
@@ -272,6 +343,7 @@ void Workspace3DWindow::showBody(bool frame)
         return; // the user moved on while the fit was running
     }
     m_viewport->setMesh(m_fit.mesh, frame);
+    updatePieces();
     updateStatus();
 }
 
@@ -304,7 +376,17 @@ void Workspace3DWindow::createActions()
 
     auto *closeAction = new QAction(tr("&Close"), this);
     closeAction->setShortcut(QKeySequence::Close);
-    connect(closeAction, &QAction::triggered, this, &QWidget::close);
+    connect(closeAction, &QAction::triggered, this,
+            [this]()
+            {
+                // Docked in Seamly2D's main window, close the dock, not just its contents.
+                if (auto *dock = qobject_cast<QDockWidget *>(parentWidget()))
+                {
+                    dock->close();
+                    return;
+                }
+                close();
+            });
 
     auto *frameAction = new QAction(tr("&Frame All"), this);
     frameAction->setShortcut(QKeySequence(Qt::Key_F));
@@ -341,6 +423,13 @@ void Workspace3DWindow::createActions()
 
     QMenu *helpMenu = menuBar()->addMenu(tr("&Help"));
     helpMenu->addAction(guideAction);
+
+    // Inside Seamly2D's main window (docked) these shortcuts only work while the 3D workspace has the focus, so they
+    // never take the main window's own (Ctrl+O opens a pattern there).
+    for (QAction *action : findChildren<QAction *>())
+    {
+        action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
+    }
 
     QToolBar *toolBar = addToolBar(tr("3D Workspace"));
     toolBar->setObjectName(QStringLiteral("Seamly3DWorkspaceToolBar"));

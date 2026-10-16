@@ -49,6 +49,9 @@ struct BodyModel
     Mesh leftArm{};
     Mesh rightArm{};
 
+    QVector3D leftShoulder{}; ///< Left arm's axis at the shoulder tip
+    QVector3D leftWrist{};    ///< Left arm's axis at the wrist
+
     Mesh combined() const;
 };
 

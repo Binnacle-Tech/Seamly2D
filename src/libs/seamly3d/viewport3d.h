@@ -45,7 +45,7 @@ namespace Seamly3D
 /**
  * @brief OpenGL viewport of the 3D workspace.
  *
- * Renders a shaded mesh (avatar) over a ground grid. Uses only QtGui/QtOpenGL with GLSL that runs on OpenGL 2.1 and
+ * Renders a shaded mesh (avatar), and overlay meshes in their own colors (pattern pieces), over a ground grid. Uses only QtGui/QtOpenGL with GLSL that runs on OpenGL 2.1 and
  * OpenGL ES 2.0 so it works with the default surface format on every platform Seamly2D supports.
  *
  * Mouse: left drag orbits, right or middle drag (or Shift + left drag) pans, the wheel zooms.
@@ -61,6 +61,16 @@ public:
     void        setMesh(const Mesh &mesh, bool frame = true);
     void        clearMesh();
     const Mesh &mesh() const;
+
+    /** @brief A mesh drawn together with the body, in its own color (pattern pieces). */
+    struct Overlay
+    {
+        Mesh   mesh{};
+        QColor color{};
+    };
+
+    void        setOverlays(const QVector<Overlay> &overlays);
+    const QVector<Overlay> &overlays() const;
 
     bool        isGridVisible() const;
 
@@ -91,9 +101,21 @@ private:
     enum class DragMode : char { None, Orbit, Pan };
 
     void        cleanupGL();
+    struct GpuMesh
+    {
+        QOpenGLBuffer vertices{QOpenGLBuffer::VertexBuffer};
+        QOpenGLBuffer indices{QOpenGLBuffer::IndexBuffer};
+        int           indexCount{0};
+    };
+
     void        uploadMesh();
+    void        uploadOverlays();
     void        uploadGrid();
+    void        drawMesh(const QMatrix4x4 &mvp, const QMatrix4x4 &view, QOpenGLBuffer &vertices,
+                         QOpenGLBuffer &indices, int indexCount, const QColor &color);
+    void        destroyOverlayBuffers();
     float       gridStep() const;
+    Bounds3D    sceneBounds() const;
 
     Mesh        m_mesh{};
     OrbitCamera m_camera{};
@@ -106,6 +128,9 @@ private:
     int           m_meshIndexCount{0};
     int           m_gridVertexCount{0};
     bool          m_meshDirty{true};
+    QVector<Overlay> m_overlays{};
+    QVector<GpuMesh> m_overlayBuffers{};
+    bool          m_overlaysDirty{false};
 
     bool        m_gridVisible{true};
     QColor      m_meshColor{204, 186, 168};

@@ -9,6 +9,10 @@ SOURCES += \
     $$PWD/objmeshwriter.cpp \
     $$PWD/bodymeasurementspanel.cpp \
     $$PWD/measurementguide.cpp \
+    $$PWD/piecemesher.cpp \
+    $$PWD/piecearrangement.cpp \
+    $$PWD/patternsource.cpp \
+    $$PWD/patternpiecespanel.cpp \
     $$PWD/objmeshreader.cpp \
     $$PWD/polygontriangulator.cpp \
     $$PWD/orbitcamera.cpp \
@@ -28,6 +32,11 @@ HEADERS += \
     $$PWD/objmeshwriter.h \
     $$PWD/bodymeasurementspanel.h \
     $$PWD/measurementguide.h \
+    $$PWD/piecemesher.h \
+    $$PWD/piecearrangement.h \
+    $$PWD/patternsource.h \
+    $$PWD/patternprovider.h \
+    $$PWD/patternpiecespanel.h \
     $$PWD/objmeshreader.h \
     $$PWD/polygontriangulator.h \
     $$PWD/orbitcamera.h \
