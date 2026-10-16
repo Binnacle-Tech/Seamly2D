@@ -99,7 +99,10 @@ public:
     double  age() const;               ///< years, 1 to 90
     void    setAge(double years);
 
-    /** @brief scaleToHeight changes the height and scales every vertical measurement by the same factor. */
+    /**
+     * @brief scaleToHeight changes the height and scales every other measurement (heights, girths, widths, lengths) by
+     * the same factor: the same body shape, at another size.
+     */
     void    scaleToHeight(double height);
 
     /**
@@ -113,8 +116,8 @@ public:
 
     /**
      * @brief readVit reads a SeamlyMe individual measurements file (.vit). Measurements the body does not use, or
-     * whose value is a formula instead of a number, are ignored. Missing height measurements are derived from the
-     * file's height. The gender is taken from the personal information when it is male or female, and the age from the
+     * whose value is a formula instead of a number, are ignored. Missing measurements are derived from the file's
+     * height, scaling the default body to it. The gender is taken from the personal information when it is male or female, and the age from the
      * birth date when it is known.
      * @param applied receives the Seamly names of the measurements taken from the file.
      */
@@ -125,9 +128,19 @@ public:
     static int     count();
     static QString name(BodyMeasurement measurement);        ///< Seamly measurement name, e.g. "bust_circ".
     static QString displayName(BodyMeasurement measurement); ///< Translated, human readable name.
-    static double  defaultValue(BodyMeasurement measurement);
+    static QString code(BodyMeasurement measurement);        ///< Number in the measurement database, e.g. "G04".
+    static QString description(BodyMeasurement measurement); ///< Translated: where and how to take it.
+    /** @brief diagram is the Seamly2D measurement diagram resource showing where to measure, e.g. ":/diagrams/Gp1.svg". */
+    static QString diagram(BodyMeasurement measurement);
+    static double  defaultValue(BodyMeasurement measurement);                ///< female default
+    static double  defaultValue(BodyMeasurement measurement, double gender); ///< 0 female ... 1 male
+
+    /** @brief defaults returns the default body for a gender (0 female, 1 male; in between blends them). */
+    static BodyMeasurements defaults(double gender);
+
+    /** @brief hasDefaultValues tells whether every measurement is the default of the body's gender. */
+    bool    hasDefaultValues() const;
     static BodyMeasurementGroup group(BodyMeasurement measurement);
-    static bool    isVertical(BodyMeasurement measurement);  ///< Scales with height.
 
 private:
     QVector<double> m_values;

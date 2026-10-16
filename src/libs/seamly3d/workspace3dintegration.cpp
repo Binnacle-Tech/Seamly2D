@@ -31,12 +31,15 @@
 #include <QMenu>
 #include <QMenuBar>
 
+#include "measurementguide.h"
 #include "workspace3dwindow.h"
 
 namespace
 {
-// Object name of the host's View menu (see mainwindow.ui). Looked up at runtime so the 2D UI file stays untouched.
+// Object names of the host's View and Help menus (see mainwindow.ui). Looked up at runtime so the 2D UI file stays
+// untouched.
 const QString hostViewMenuName = QStringLiteral("view_Menu");
+const QString hostHelpMenuName = QStringLiteral("help_Menu");
 } // anonymous namespace
 
 namespace Seamly3D
@@ -76,6 +79,23 @@ Workspace3DIntegration::Workspace3DIntegration(QMainWindow *host)
     else
     {
         host->menuBar()->addAction(m_action);
+    }
+
+    // Help > How to Measure: where on the body to take each measurement.
+    if (auto *helpMenu = host->findChild<QMenu *>(hostHelpMenuName))
+    {
+        auto *guideAction = new QAction(tr("How to Measure (Body)"), this);
+        guideAction->setObjectName(QStringLiteral("seamly3dMeasuringGuide_Action"));
+        guideAction->setToolTip(tr("Where on the body to take each measurement"));
+        connect(guideAction, &QAction::triggered, this,
+                [host]()
+                {
+                    auto *dialog = new MeasurementGuideDialog(host);
+                    dialog->setAttribute(Qt::WA_DeleteOnClose);
+                    dialog->show();
+                });
+        helpMenu->insertAction(helpMenu->actions().value(0), guideAction);
+        helpMenu->insertSeparator(helpMenu->actions().value(1));
     }
 }
 

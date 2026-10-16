@@ -112,6 +112,75 @@ const MeasurementInfo measurementInfo[] = {
 static_assert(sizeof(measurementInfo) / sizeof(measurementInfo[0]) == static_cast<size_t>(BodyMeasurement::Count),
               "measurementInfo must describe every BodyMeasurement");
 
+// Male defaults in BodyMeasurement order: MakeHuman's average adult man (25 years, average weight and muscle)
+// measured with MakeHumanTape and scaled to 178 cm, rounded to 0.5 cm.
+const double maleDefaults[] = {
+    178.0, 149.5, 146.5, 134.0, 130.0, 108.0, 93.0, 85.5, 55.0, 39.5, 11.0, // heights
+    61.0,  46.0,  99.0,  86.5,  79.0,  96.0,  56.0, 37.5, 39.5, 23.5,       // girths
+    40.0,  56.5,  34.0,  28.5,  15.5};                                     // shoulders and arms
+
+static_assert(sizeof(maleDefaults) / sizeof(maleDefaults[0]) == static_cast<size_t>(BodyMeasurement::Count),
+              "maleDefaults must have a value for every BodyMeasurement");
+
+// How to take each measurement, in BodyMeasurement order: number in the measurement database, the diagram of
+// the Seamly2D diagram resource (see MapDiagrams() in vpatterndb) and the database's description.
+struct MeasurementGuide
+{
+    const char *code;
+    const char *diagram;
+    const char *description;
+};
+
+const MeasurementGuide guides[] = {
+    {"A01", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Vertical distance from crown of head to floor.")},
+    {"A02", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from the Neck Back (cervicale vertebra) to the floor.")},
+    {"A15", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from the Shoulder Tip to the floor.")},
+    {"A04", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Vertical distance from the Armpit to the floor.")},
+    {"A14", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from Bustpoint to the floor.")},
+    {"A05", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from the Waist Side to the floor.")},
+    {"A06", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from the Hip level to the floor.")},
+    {"M01", "Mp1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Stand feet close together. Measure from crotch "
+                                     "level (touching body, no extra space) down to floor.")},
+    {"A08", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from the fold at the back of the Knee to the floor.")},
+    {"A09", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from the widest point of the calf to the floor.")},
+    {"A11", "Ap1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Vertical distance from point where the front leg meets the foot to the floor.")},
+
+    {"F01", "Fp1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Measure circumference at largest level of head.")},
+    {"G02", "Gp1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Neck circumference at base of Neck, touching "
+                                     "Neck Back, Neck Sides, and Neck Front.")},
+    {"G04", "Gp1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Circumference around Bust, parallel to floor.")},
+    {"G05", "Gp1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Circumference around LowBust under the breasts, parallel to floor.")},
+    {"G07", "Gp1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Circumference around Waist, following natural "
+                                     "contours. Waists are typically higher in back.")},
+    {"G09", "Gp1", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Circumference around Hip where Hip protrusion is "
+                                     "greatest, parallel to floor.")},
+    {"M03", "Mp2", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Thigh circumference at the fullest part of the upper Thigh near the Crotch.")},
+    {"M05", "Mp2", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Knee circumference with straight leg.")},
+    {"M07", "Mp2", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Calf circumference at the largest part of lower leg.")},
+    {"M09", "Mp2", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements",
+                                     "Ankle circumference where front of leg meets the top of the foot.")},
+
+    {"I07", "Ip3", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "From Shoulder Tip to Shoulder Tip, across the back.")},
+    {"L05", "Lp2", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "From Shoulder Tip to Wrist bone, arm straight.")},
+    {"L11", "Lp4", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Arm circumference at Armpit level.")},
+    {"L13", "Lp4", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Elbow circumference, arm straight.")},
+    {"L15", "Lp4", QT_TRANSLATE_NOOP("Seamly3D::BodyMeasurements", "Wrist circumference.")},
+};
+
+static_assert(sizeof(guides) / sizeof(guides[0]) == static_cast<size_t>(BodyMeasurement::Count),
+              "guides must describe every BodyMeasurement");
+
 const BodyMeasurement verticalOrder[] = {
     BodyMeasurement::Height,       BodyMeasurement::NeckBackHeight,  BodyMeasurement::ShoulderTipHeight,
     BodyMeasurement::ArmpitHeight, BodyMeasurement::BustpointHeight, BodyMeasurement::WaistHeight,
@@ -206,13 +275,11 @@ void BodyMeasurements::scaleToHeight(double height)
         return;
     }
 
+    // Everything scales, girths too: scaling only the lengths would make a stretched, thin body.
     const double factor = height / current;
-    for (int i = 0; i < count(); ++i)
+    for (double &measurement : m_values)
     {
-        if (isVertical(static_cast<BodyMeasurement>(i)))
-        {
-            m_values[i] *= factor;
-        }
+        measurement *= factor;
     }
     setValue(BodyMeasurement::Height, height); // avoid rounding drift
 }
@@ -225,7 +292,7 @@ BodyMeasurements BodyMeasurements::sanitized() const
     {
         if (!(result.m_values.at(i) > 0.0)) // also catches NaN
         {
-            result.m_values[i] = defaultValue(static_cast<BodyMeasurement>(i));
+            result.m_values[i] = defaultValue(static_cast<BodyMeasurement>(i), m_gender);
         }
     }
 
@@ -439,9 +506,59 @@ QString BodyMeasurements::displayName(BodyMeasurement measurement)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+QString BodyMeasurements::code(BodyMeasurement measurement)
+{
+    return QString::fromLatin1(guides[static_cast<int>(measurement)].code);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString BodyMeasurements::description(BodyMeasurement measurement)
+{
+    return tr(guides[static_cast<int>(measurement)].description);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString BodyMeasurements::diagram(BodyMeasurement measurement)
+{
+    return QStringLiteral(":/diagrams/%1.svg").arg(QString::fromLatin1(guides[static_cast<int>(measurement)].diagram));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 double BodyMeasurements::defaultValue(BodyMeasurement measurement)
 {
     return info(measurement).defaultValue;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double BodyMeasurements::defaultValue(BodyMeasurement measurement, double gender)
+{
+    const double g = qBound(0.0, gender, 1.0);
+    return (1 - g) * info(measurement).defaultValue + g * maleDefaults[static_cast<int>(measurement)];
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+BodyMeasurements BodyMeasurements::defaults(double gender)
+{
+    BodyMeasurements result;
+    result.setGender(gender);
+    for (int i = 0; i < count(); ++i)
+    {
+        result.m_values[i] = defaultValue(static_cast<BodyMeasurement>(i), result.m_gender);
+    }
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool BodyMeasurements::hasDefaultValues() const
+{
+    for (int i = 0; i < count(); ++i)
+    {
+        if (!qFuzzyCompare(m_values.at(i), defaultValue(static_cast<BodyMeasurement>(i), m_gender)))
+        {
+            return false;
+        }
+    }
+    return true;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -450,10 +567,5 @@ BodyMeasurementGroup BodyMeasurements::group(BodyMeasurement measurement)
     return info(measurement).group;
 }
 
-//---------------------------------------------------------------------------------------------------------------------
-bool BodyMeasurements::isVertical(BodyMeasurement measurement)
-{
-    return group(measurement) == BodyMeasurementGroup::Height || measurement == BodyMeasurement::ArmLength;
-}
 
 } // namespace Seamly3D

@@ -113,7 +113,7 @@ struct MakeHumanFit
         BodyMeasurement measurement{BodyMeasurement::Height};
         double          target{0};   ///< centimeters
         double          achieved{0}; ///< centimeters, measured on the fitted body
-        bool            fitted{false}; ///< false: not used for this body (lowbust and bustpoint of a child)
+        bool            fitted{false}; ///< false: not used for this body (lowbust and bustpoint of a child or man)
     };
 
     bool            valid{false};
@@ -132,8 +132,8 @@ struct MakeHumanFit
 /**
  * @brief Fits a MakeHuman body to a person's measurements.
  *
- * 1. Gender, age and muscle come from the measurements. Children (under 13) get a flat chest, and their lowbust
- *    and bustpoint are not fitted.
+ * 1. Gender, age and muscle come from the measurements. Children (under 13) get a flat chest. Lowbust and
+ *    bustpoint are only fitted on women: they describe a bust, and on others the lowbust tape carves a rib line.
  * 2. The height macro, then the weight macro (overall build from bust, waist and hip) and, for female bodies, the
  *    breast size macro (from bust minus lowbust) are found by bisection.
  * 3. A uniform scale makes the height exact.

@@ -72,8 +72,15 @@ width, arm length and head circumference.
   Inconsistent ones are matched as far as a natural body allows, without
   creases. The status bar shows the largest difference, and its tooltip has
   every measurement, wanted and achieved.
-* **Children** (under 13) get a flat chest; their lowbust and bustpoint
-  aren't used.
+* **Children** (under 13) get a flat chest. Lowbust and bustpoint are used
+  only for women: they describe a bust, and on children and men MakeHuman's
+  lowbust tape carves a rib line into the chest.
+* **Changing the height** scales every measurement by the same factor (with
+  "Scale everything with height" on), so you keep the same body shape at the
+  new size. Enter your height first, then adjust what differs.
+* **Defaults** are MakeHuman's average woman (168 cm) or man (178 cm).
+  Switching the body shape while the measurements are still the defaults
+  switches to the other set, and **Reset** uses the current shape's defaults.
 * **Speed:** a fit takes 0.15 to 0.6 s in a release build. It runs in the
   background, so typing stays responsive.
 
@@ -114,6 +121,14 @@ Known limitations of the mannequin: it is dress-form-like, not an organic
 body. Joins at the shoulders and crotch are visible, there are
 no feet or fingers, and front/back and left/right asymmetry, posture and bust
 shape are not modeled. The roadmap covers these.
+
+### How to measure
+
+The **How to measure** box under the measurement fields shows the Seamly2D
+diagram and description of the measurement being edited. The number in
+brackets, such as G04, is the label on the diagram. **All Measurements...**,
+**Help > How to Measure** in the 3D window (F1), and **Help > How to Measure
+(Body)** in the main window open a guide with every measurement.
 
 ## Body models and MakeHuman
 

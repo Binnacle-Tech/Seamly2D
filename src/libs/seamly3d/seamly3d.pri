@@ -8,6 +8,7 @@ SOURCES += \
     $$PWD/parametricbody.cpp \
     $$PWD/objmeshwriter.cpp \
     $$PWD/bodymeasurementspanel.cpp \
+    $$PWD/measurementguide.cpp \
     $$PWD/objmeshreader.cpp \
     $$PWD/polygontriangulator.cpp \
     $$PWD/orbitcamera.cpp \
@@ -26,6 +27,7 @@ HEADERS += \
     $$PWD/parametricbody.h \
     $$PWD/objmeshwriter.h \
     $$PWD/bodymeasurementspanel.h \
+    $$PWD/measurementguide.h \
     $$PWD/objmeshreader.h \
     $$PWD/polygontriangulator.h \
     $$PWD/orbitcamera.h \

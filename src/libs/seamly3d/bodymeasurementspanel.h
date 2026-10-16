@@ -39,8 +39,12 @@ class QLabel;
 class QSlider;
 class QSpinBox;
 
+class QEvent;
+
 namespace Seamly3D
 {
+
+class MeasurementGuideWidget;
 
 /**
  * @brief Form where the user enters their body measurements (or loads them from a SeamlyMe .vit file).
@@ -64,6 +68,10 @@ signals:
 public slots:
     void loadVitFile();
     void resetToDefaults();
+    void showMeasuringGuide(); ///< Opens "How to Measure" at the measurement being edited.
+
+protected:
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private slots:
     void valueEdited(int index);
@@ -84,6 +92,7 @@ private:
     QSpinBox                *m_ageSpinBox;
     QCheckBox               *m_proportionalCheckBox;
     QLabel                  *m_sourceLabel;
+    MeasurementGuideWidget  *m_guide;
     QString                  m_lastDirectory{};
     bool                     m_updating{false};
 };
