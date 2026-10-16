@@ -22,7 +22,12 @@ SOURCES += \
     $$PWD/workspace3dwindow.cpp \
     $$PWD/workspace3dintegration.cpp \
     $$PWD/makehuman/makehumanmodel.cpp \
-    $$PWD/makehuman/makehumanfitter.cpp
+    $$PWD/makehuman/makehumanfitter.cpp \
+    $$PWD/dxfimport/dxfreader.cpp \
+    $$PWD/dxfimport/dxfpattern.cpp \
+    $$PWD/dxfimport/outlinefitter.cpp \
+    $$PWD/dxfimport/dxfpatternconverter.cpp \
+    $$PWD/dxfimport/dxfimportwizard.cpp
 
 *msvc*:SOURCES += $$PWD/stable.cpp
 
@@ -49,6 +54,11 @@ HEADERS += \
     $$PWD/workspace3dintegration.h \
     $$PWD/makehuman/makehumanmodel.h \
     $$PWD/makehuman/makehumanfitter.h \
+    $$PWD/dxfimport/dxfreader.h \
+    $$PWD/dxfimport/dxfpattern.h \
+    $$PWD/dxfimport/outlinefitter.h \
+    $$PWD/dxfimport/dxfpatternconverter.h \
+    $$PWD/dxfimport/dxfimportwizard.h \
     $$PWD/stable.h
 
 # MakeHuman body data (CC0 assets), embedded so no install or deploy step is needed.

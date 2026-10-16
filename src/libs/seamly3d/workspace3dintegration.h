@@ -30,6 +30,8 @@
 #include <QObject>
 #include <QPointer>
 
+#include <functional>
+
 class QAction;
 class QDockWidget;
 class QMainWindow;
@@ -44,15 +46,23 @@ class Workspace3DWindow;
  *
  * Call Workspace3DIntegration::install() once from the host main window. It adds a "3D Workspace" toggle to the host's
  * View menu (falling back to the menu bar) and "How to Measure (Body)" to its Help menu. The 3D workspace opens as a
- * dock of the main window, next to the 2D pattern (it can be floated out); it is created on first use. No other 2D code
- * needs to know about the 3D workspace.
+ * dock of the main window, next to the 2D pattern (it can be floated out); it is created on first use. It also adds
+ * "Import DXF Pattern..." to the File menu: a wizard converting DXF patterns from other CAD systems into Seamly2D
+ * patterns. No other 2D code needs to know about any of this.
  */
 class Workspace3DIntegration : public QObject
 {
     Q_OBJECT
 
 public:
-    static Workspace3DIntegration *install(QMainWindow *host);
+    /** @brief Opens a pattern file in the host; returns whether it did. */
+    using PatternOpener = std::function<bool(const QString &fileName)>;
+
+    /**
+     * @brief install hooks the 3D workspace and the DXF import into @p host.
+     * @param openPattern opens a converted pattern; without it, the pattern opens in a new Seamly2D window
+     */
+    static Workspace3DIntegration *install(QMainWindow *host, const PatternOpener &openPattern = PatternOpener());
 
     QAction           *action() const;
     Workspace3DWindow *window() const;
@@ -60,15 +70,17 @@ public:
 public slots:
     void showWorkspace();
     void setWorkspaceVisible(bool visible);
+    void importDxfPattern();
 
 private:
-    explicit Workspace3DIntegration(QMainWindow *host);
+    Workspace3DIntegration(QMainWindow *host, const PatternOpener &openPattern);
     Q_DISABLE_COPY_MOVE(Workspace3DIntegration)
 
     QMainWindow                 *m_host;
     QAction                     *m_action;
     QPointer<Workspace3DWindow>  m_window{};
     QPointer<QDockWidget>        m_dock{};
+    PatternOpener                m_openPattern{};
 };
 
 } // namespace Seamly3D

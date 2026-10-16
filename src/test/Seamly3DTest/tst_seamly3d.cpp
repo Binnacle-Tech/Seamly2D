@@ -30,6 +30,10 @@
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QVector2D>
+#include <QDomDocument>
+#include <QProcess>
+#include <QStandardPaths>
+#include <QTemporaryDir>
 #include <QtTest>
 
 #include <limits>
@@ -37,6 +41,11 @@
 #include "bodymeasurements.h"
 #include "bodymeasurementspanel.h"
 #include "clothsimulator.h"
+#include "dxfimport/dxfimportwizard.h"
+#include "dxfimport/dxfpattern.h"
+#include "dxfimport/dxfpatternconverter.h"
+#include "dxfimport/dxfreader.h"
+#include "dxfimport/outlinefitter.h"
 #include "garment.h"
 #include "makehuman/makehumanfitter.h"
 #include "makehuman/makehumanmodel.h"
@@ -225,6 +234,16 @@ private slots:
     void clothSewsTube();
     void clothSewsShirtOnBody();
     void measurementsPanelUnits();
+
+    void dxfReaderParsesDrawing();
+    void dxfBulgeArc();
+    void dxfSplineIsBezier();
+    void dxfAamaPieces();
+    void dxfPlainOutlines();
+    void outlineFitterCornersAndCurves();
+    void dxfConverterWritesValidPattern();
+    void dxfConverterRebuildsOutline();
+    void dxfImportWizardConverts();
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1885,6 +1904,595 @@ void TST_Seamly3D::measurementsPanelUnits()
     panel.setUnit(QStringLiteral("furlong")); // unknown: keep the current unit
     QCOMPARE(panel.unit(), QStringLiteral("inch"));
     QCOMPARE(FakeProvider().defaultUnit(), QStringLiteral("cm"));
+}
+
+namespace
+{
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Builds DXF text group by group. */
+class DxfText
+{
+public:
+    DxfText &operator()(int code, const QString &value)
+    {
+        m_text += QString::number(code) + QLatin1Char('\n') + value + QLatin1Char('\n');
+        return *this;
+    }
+    DxfText &operator()(int code, double value) { return (*this)(code, QString::number(value, 'g', 12)); }
+    DxfText &point(const QString &layer, const QPointF &p)
+    {
+        return (*this)(0, QStringLiteral("POINT"))(8, layer)(10, p.x())(20, p.y())(30, 0.0);
+    }
+    DxfText &line(const QString &layer, const QPointF &a, const QPointF &b)
+    {
+        return (*this)(0, QStringLiteral("LINE"))(8, layer)(10, a.x())(20, a.y())(30, 0.0)(11, b.x())(21, b.y())(31, 0.0);
+    }
+    DxfText &text(const QString &layer, const QString &value)
+    {
+        return (*this)(0, QStringLiteral("TEXT"))(8, layer)(10, 0.0)(20, 0.0)(40, 3.0)(1, value);
+    }
+    /** @brief An R12 POLYLINE: vertices with bulges. */
+    DxfText &polyline(const QString &layer, const QVector<QPointF> &points, const QVector<double> &bulges, bool closed)
+    {
+        (*this)(0, QStringLiteral("POLYLINE"))(8, layer)(66, 1.0)(70, closed ? 1.0 : 0.0);
+        for (int i = 0; i < points.size(); ++i)
+        {
+            (*this)(0, QStringLiteral("VERTEX"))(8, layer)(10, points.at(i).x())(20, points.at(i).y())(30, 0.0)
+                (42, bulges.value(i));
+        }
+        return (*this)(0, QStringLiteral("SEQEND"));
+    }
+    QByteArray data() const { return m_text.toUtf8(); }
+
+private:
+    QString m_text{};
+};
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief An AAMA pattern in millimeters, two pieces.
+ *
+ * Front: the seam line is a U, 200 wide, its sides 300 long, closed by a half circle (radius 100) bulging up. The cut
+ * line is 10 outside it, 30 below (a hem). Turn points at the cut line's lower corners, a notch on the right side,
+ * a grain line, an internal line and a drill hole. Inserted at (1000, 500). Sleeve: a cut line only, three lines and a
+ * spline, drawn as separate entities.
+ */
+QByteArray aamaTestDxf()
+{
+    DxfText dxf;
+    dxf(0, QStringLiteral("SECTION"))(2, QStringLiteral("HEADER"))(9, QStringLiteral("$ACADVER"))(1, QStringLiteral("AC1009"))
+        (9, QStringLiteral("$INSUNITS"))(70, 1.0) // says inches; the AAMA UNITS text wins
+        (0, QStringLiteral("ENDSEC"));
+    dxf(0, QStringLiteral("SECTION"))(2, QStringLiteral("BLOCKS"));
+
+    dxf(0, QStringLiteral("BLOCK"))(8, QStringLiteral("1"))(2, QStringLiteral("FRONT"))(70, 0.0)(10, 0.0)(20, 0.0)(30, 0.0);
+    dxf.polyline(QStringLiteral("1"), {QPointF(-10, -30), QPointF(210, -30), QPointF(210, 300), QPointF(-10, 300)},
+                 {0, 0, 1, 0}, true);
+    dxf.polyline(QStringLiteral("14"), {QPointF(0, 0), QPointF(200, 0), QPointF(200, 300), QPointF(0, 300)},
+                 {0, 0, 1, 0}, true);
+    dxf.point(QStringLiteral("2"), QPointF(-10, -30));
+    dxf.point(QStringLiteral("2"), QPointF(210, -30));
+    dxf.line(QStringLiteral("4"), QPointF(210, 150), QPointF(204, 150));
+    dxf.line(QStringLiteral("7"), QPointF(100, 50), QPointF(100, 250));
+    dxf.line(QStringLiteral("8"), QPointF(60, 100), QPointF(140, 100));
+    dxf.point(QStringLiteral("13"), QPointF(100, 200));
+    dxf.text(QStringLiteral("1"), QStringLiteral("Piece Name: Front"));
+    dxf.text(QStringLiteral("1"), QStringLiteral("Quantity: 2"));
+    dxf(0, QStringLiteral("ENDBLK"))(8, QStringLiteral("1"));
+
+    dxf(0, QStringLiteral("BLOCK"))(8, QStringLiteral("1"))(2, QStringLiteral("SLEEVE"))(70, 0.0)(10, 0.0)(20, 0.0)(30, 0.0);
+    dxf.line(QStringLiteral("1"), QPointF(0, 0), QPointF(300, 0));
+    dxf.line(QStringLiteral("1"), QPointF(300, 0), QPointF(300, 100));
+    dxf.line(QStringLiteral("1"), QPointF(0, 100), QPointF(0, 0));
+    // A clamped cubic B-spline with 4 control points is a Bezier curve: from (300, 100) up to (0, 100).
+    dxf(0, QStringLiteral("SPLINE"))(8, QStringLiteral("1"))(70, 8.0)(71, 3.0)(72, 8.0)(73, 4.0)(74, 0.0);
+    for (const double knot : {0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0})
+    {
+        dxf(40, knot);
+    }
+    for (const QPointF &p : {QPointF(300, 100), QPointF(250, 220), QPointF(50, 220), QPointF(0, 100)})
+    {
+        dxf(10, p.x())(20, p.y())(30, 0.0);
+    }
+    dxf(0, QStringLiteral("ENDBLK"))(8, QStringLiteral("1"));
+    dxf(0, QStringLiteral("ENDSEC"));
+
+    dxf(0, QStringLiteral("SECTION"))(2, QStringLiteral("ENTITIES"));
+    dxf(0, QStringLiteral("INSERT"))(8, QStringLiteral("1"))(2, QStringLiteral("FRONT"))(10, 1000.0)(20, 500.0)(30, 0.0);
+    dxf(0, QStringLiteral("INSERT"))(8, QStringLiteral("1"))(2, QStringLiteral("SLEEVE"))(10, 1500.0)(20, 500.0)(30, 0.0);
+    dxf.text(QStringLiteral("1"), QStringLiteral("ASTM/D6673/10"));
+    dxf.text(QStringLiteral("1"), QStringLiteral("UNITS: METRIC"));
+    dxf(0, QStringLiteral("ENDSEC"))(0, QStringLiteral("EOF"));
+    return dxf.data();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Distance from @p p to the polyline (closed) @p polygon. */
+double distanceToPolygon(const QPointF &p, const QPolygonF &polygon)
+{
+    double best = std::numeric_limits<double>::max();
+    for (int i = 0; i < polygon.size(); ++i)
+    {
+        const QPointF a = polygon.at(i);
+        const QPointF b = polygon.at((i + 1) % polygon.size());
+        const QPointF ab = b - a;
+        const double l2 = QPointF::dotProduct(ab, ab);
+        const double t = l2 > 0 ? qBound(0.0, QPointF::dotProduct(p - a, ab) / l2, 1.0) : 0.0;
+        best = qMin(best, QLineF(p, a + ab * t).length());
+    }
+    return best;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief The front's seam line in the pattern (cm, Y down, before placing): a U closed by a half circle. */
+QPolygonF frontSeamLine(int samples = 720)
+{
+    QPolygonF seam;
+    seam << QPointF(0, 0) << QPointF(20, 0) << QPointF(20, -30);
+    for (int i = 1; i < samples; ++i)
+    {
+        const double a = M_PI * i / samples;
+        seam << QPointF(10 + 10 * std::cos(a), -30 - 10 * std::sin(a));
+    }
+    seam << QPointF(0, -30);
+    return seam;
+}
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfReaderParsesDrawing()
+{
+    DxfReader reader;
+    DxfDocument document;
+    QVERIFY2(reader.parse(aamaTestDxf(), document), qPrintable(reader.errorString()));
+    QCOMPARE(document.header.value(QStringLiteral("$INSUNITS")), QStringLiteral("1"));
+    QCOMPARE(document.blocks.size(), 2);
+    QVERIFY(document.block(QStringLiteral("front")) != nullptr); // names are not case sensitive
+    QCOMPARE(document.entities.size(), 4);
+    QCOMPARE(document.entities.at(0).type, QStringLiteral("INSERT"));
+    QCOMPARE(document.entities.at(0).text, QStringLiteral("FRONT"));
+
+    const DxfBlock *front = document.block(QStringLiteral("FRONT"));
+    const DxfEntity &cut = front->entities.at(0);
+    QCOMPARE(cut.type, QStringLiteral("POLYLINE"));
+    QCOMPARE(cut.layer, QStringLiteral("1"));
+    QVERIFY(cut.closed);
+    QCOMPARE(cut.points.size(), 4);
+    QCOMPARE(cut.bulges.at(2), 1.0);
+
+    QVERIFY(!reader.parse(QByteArray("AutoCAD Binary DXF\r\n\x1a"), document));
+    QVERIFY(!reader.parse(QByteArray("hello"), document));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfBulgeArc()
+{
+    // A bulge of 1 is a half circle, counterclockwise: from (200, 300) over (100, 400) to (0, 300).
+    DxfEntity polyline;
+    polyline.type = QStringLiteral("LWPOLYLINE");
+    polyline.points = {QPointF(200, 300), QPointF(0, 300)};
+    polyline.bulges = {1.0, 0.0};
+    const QPolygonF points = polyline.flatten(0.01);
+    QVERIFY(points.size() > 20);
+    QCOMPARE(points.constFirst(), QPointF(200, 300));
+    QCOMPARE(points.constLast(), QPointF(0, 300));
+    double highest = 0;
+    for (const QPointF &p : points)
+    {
+        QVERIFY(qAbs(QLineF(p, QPointF(100, 300)).length() - 100) < 1e-6);
+        highest = qMax(highest, p.y());
+    }
+    QVERIFY(qAbs(highest - 400) < 0.02);
+
+    // Negative: clockwise, below.
+    polyline.bulges = {-1.0, 0.0};
+    double lowest = 1000;
+    for (const QPointF &p : polyline.flatten(0.01))
+    {
+        lowest = qMin(lowest, p.y());
+    }
+    QVERIFY(qAbs(lowest - 200) < 0.02);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfSplineIsBezier()
+{
+    DxfEntity spline;
+    spline.type = QStringLiteral("SPLINE");
+    spline.degree = 3;
+    spline.knots = {0, 0, 0, 0, 1, 1, 1, 1};
+    spline.points = {QPointF(0, 0), QPointF(0, 10), QPointF(10, 10), QPointF(10, 0)};
+    const QPolygonF points = spline.flatten(0.01);
+    QVERIFY(QLineF(points.constFirst(), QPointF(0, 0)).length() < 1e-9);
+    QVERIFY(QLineF(points.constLast(), QPointF(10, 0)).length() < 1e-6);
+    // The Bezier's middle: (5, 7.5).
+    double best = 1e9;
+    for (const QPointF &p : points)
+    {
+        best = qMin(best, QLineF(p, QPointF(5, 7.5)).length());
+    }
+    QVERIFY2(best < 0.05, qPrintable(QString::number(best)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfAamaPieces()
+{
+    DxfReader reader;
+    DxfDocument document;
+    QVERIFY(reader.parse(aamaTestDxf(), document));
+    const DxfPattern pattern = DxfPatternReader::extract(document);
+    QVERIFY(pattern.astm);
+    QCOMPARE(pattern.unit, QStringLiteral("mm"));
+    QCOMPARE(pattern.pieces.size(), 2);
+
+    const DxfPiece &front = pattern.pieces.at(0);
+    QCOMPARE(front.name, QStringLiteral("Front"));
+    QCOMPARE(front.quantity, 2);
+    QVERIFY(front.cutLine.size() > 20);
+    QVERIFY(front.sewLine.size() > 20);
+    // Placed where the block is inserted.
+    QVERIFY(qAbs(front.sewLine.boundingRect().left() - 1000) < 1e-6);
+    QVERIFY(qAbs(front.sewLine.boundingRect().bottom() - 900) < 0.05);
+    QCOMPARE(front.turnPoints.size(), 2);
+    QCOMPARE(front.notches.size(), 1);
+    QCOMPARE(front.notches.constFirst().p1(), QPointF(1210, 650)); // starts on the outline
+    QVERIFY(front.hasGrainline);
+    QCOMPARE(front.grainline, QLineF(1100, 550, 1100, 750));
+    QCOMPARE(front.internalLines.size(), 1);
+    QCOMPARE(front.drillHoles.size(), 1);
+
+    // The sleeve's outline is made of four separate curves, joined.
+    const DxfPiece &sleeve = pattern.pieces.at(1);
+    QCOMPARE(sleeve.name, QStringLiteral("SLEEVE"));
+    QVERIFY(sleeve.sewLine.isEmpty());
+    QVERIFY(sleeve.cutLine.size() > 10);
+    const QRectF box = sleeve.cutLine.boundingRect();
+    QVERIFY(qAbs(box.width() - 300) < 1e-6);
+    QVERIFY(qAbs(box.top() - 500) < 1e-6);
+    QVERIFY(qAbs(box.bottom() - 690) < 0.1); // the spline's top: 100 + 0.75 * 120
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfPlainOutlines()
+{
+    // No AAMA layers: every outermost closed outline is a piece; one running parallel inside it is its sew line,
+    // anything else inside is an internal line. Units from the header.
+    DxfText dxf;
+    dxf(0, QStringLiteral("SECTION"))(2, QStringLiteral("HEADER"))(9, QStringLiteral("$INSUNITS"))(70, 5.0)
+        (0, QStringLiteral("ENDSEC"));
+    dxf(0, QStringLiteral("SECTION"))(2, QStringLiteral("ENTITIES"));
+    dxf.polyline(QStringLiteral("CUT"), {QPointF(0, 0), QPointF(40, 0), QPointF(40, 60), QPointF(0, 60)}, {}, true);
+    dxf.polyline(QStringLiteral("SEW"), {QPointF(1, 1), QPointF(39, 1), QPointF(39, 59), QPointF(1, 59)}, {}, true);
+    dxf.polyline(QStringLiteral("DART"), {QPointF(15, 10), QPointF(20, 30), QPointF(25, 10)}, {}, false);
+    dxf(0, QStringLiteral("TEXT"))(8, QStringLiteral("0"))(10, 20.0)(20, 40.0)(40, 2.0)(1, QStringLiteral("Back"));
+    // A second piece made of lines.
+    dxf.line(QStringLiteral("0"), QPointF(100, 0), QPointF(130, 0));
+    dxf.line(QStringLiteral("0"), QPointF(130, 0), QPointF(115, 20));
+    dxf.line(QStringLiteral("0"), QPointF(100, 0), QPointF(115, 20)); // reversed: still joins
+    dxf(0, QStringLiteral("ENDSEC"))(0, QStringLiteral("EOF"));
+
+    DxfReader reader;
+    DxfDocument document;
+    QVERIFY(reader.parse(dxf.data(), document));
+    const DxfPattern pattern = DxfPatternReader::extract(document);
+    QVERIFY(!pattern.astm);
+    QCOMPARE(pattern.unit, QStringLiteral("cm"));
+    QCOMPARE(pattern.pieces.size(), 2);
+    QCOMPARE(pattern.pieces.at(0).name, QStringLiteral("Back"));
+    QCOMPARE(pattern.pieces.at(0).sewLine.size(), 4);
+    QCOMPARE(pattern.pieces.at(0).internalLines.size(), 1);
+    QCOMPARE(pattern.pieces.at(1).cutLine.size(), 3);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::outlineFitterCornersAndCurves()
+{
+    // A U closed by a half circle, sampled densely: two corners at the bottom, three straight lines, and the half
+    // circle as a few smooth curves meeting the sides without a kink.
+    const QPolygonF seam = frontSeamLine();
+    OutlineFitter::Settings settings;
+    settings.tolerance = 0.05;
+    const FittedPath path = OutlineFitter::fit(seam, true, settings);
+
+    QVERIFY2(path.points.size() <= 8, qPrintable(QString::number(path.points.size())));
+    QVERIFY(path.maxDeviation <= 0.05);
+    int corners = 0;
+    for (const FittedPoint &point : path.points)
+    {
+        corners += point.corner ? 1 : 0;
+    }
+    QCOMPARE(corners, 2);
+    QCOMPARE(path.points.constFirst().position, QPointF(0, 0)); // starts at a corner
+    QVERIFY(path.curveCount() >= 2);
+
+    // The fitted outline stays close to the original everywhere.
+    for (const QPointF &p : path.polygon(64))
+    {
+        QVERIFY2(distanceToPolygon(p, seam) < 0.06, qPrintable(QString::number(distanceToPolygon(p, seam))));
+    }
+
+    // Smooth where the half circle meets the sides: the curve leaves along the side.
+    for (const FittedPoint &point : path.points)
+    {
+        if (QLineF(point.position, QPointF(20, -30)).length() < 1e-6)
+        {
+            QVERIFY(!point.lineAfter);
+            QVERIFY(qAbs(QLineF(QPointF(), point.handleOut).angle() - 90) < 0.5); // straight up, Y down
+        }
+    }
+
+    // A notch becomes a point of the outline.
+    const FittedPath notched = OutlineFitter::fit(seam, true, settings, {}, {QPointF(20, -15)});
+    bool found = false;
+    for (const FittedPoint &point : notched.points)
+    {
+        found = found || (point.notch && QLineF(point.position, QPointF(20, -15)).length() < 1e-9);
+    }
+    QVERIFY(found);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfConverterWritesValidPattern()
+{
+    DxfReader reader;
+    DxfDocument document;
+    QVERIFY(reader.parse(aamaTestDxf(), document));
+    const DxfPattern pattern = DxfPatternReader::extract(document);
+
+    DxfImportOptions options;
+    options.sourceUnit = pattern.unit;
+    options.targetUnit = QStringLiteral("cm");
+    options.description = QStringLiteral("Imported");
+    const QVector<PreparedPiece> pieces = DxfPatternConverter::prepare(pattern, options);
+    QCOMPARE(pieces.size(), 2);
+
+    // The front: seam allowance from the file, 1 cm, with 3 cm along the hem.
+    const PreparedPiece &front = pieces.at(0);
+    QVERIFY(front.seamAllowance);
+    QVERIFY(!front.seamAllowanceBuiltIn);
+    QVERIFY2(qAbs(front.width - 1.0) < 0.011, qPrintable(QString::number(front.width)));
+    QVERIFY(std::any_of(front.segmentWidths.cbegin(), front.segmentWidths.cend(),
+                        [](double w) { return qAbs(w - 3.0) < 0.011; }));
+    QVERIFY(front.hasGrainline);
+    QVERIFY(qAbs(front.grainline.length() - 20) < 1e-6);
+    QVERIFY(qAbs(front.grainline.angle() - 90) < 1e-6); // pointing up
+    QCOMPARE(front.internalLines.size(), 1);
+    QCOMPARE(front.drillHoles.size(), 1);
+    QCOMPARE(front.quantity, 2);
+    // The sleeve: its cut line, allowance included.
+    QVERIFY(pieces.at(1).seamAllowanceBuiltIn);
+
+    const QByteArray xml = DxfPatternConverter::write(pieces, options);
+    QDomDocument dom;
+    QVERIFY(dom.setContent(xml));
+    const QDomElement root = dom.documentElement();
+    QCOMPARE(root.tagName(), QStringLiteral("pattern"));
+    QCOMPARE(root.firstChildElement(QStringLiteral("version")).text(), DxfPatternConverter::formatVersion());
+    QCOMPARE(root.firstChildElement(QStringLiteral("unit")).text(), QStringLiteral("cm"));
+    QCOMPARE(root.elementsByTagName(QStringLiteral("draftBlock")).size(), 2);
+    QCOMPARE(root.elementsByTagName(QStringLiteral("piece")).size(), 2);
+    QCOMPARE(root.firstChildElement(QStringLiteral("draftBlock")).attribute(QStringLiteral("name")),
+             QStringLiteral("Front"));
+
+    // Ids are unique; every reference points at something defined.
+    QSet<QString> ids;
+    const QDomNodeList all = root.elementsByTagName(QStringLiteral("*"));
+    for (int i = 0; i < all.size(); ++i)
+    {
+        const QDomElement element = all.at(i).toElement();
+        if (element.hasAttribute(QStringLiteral("id")))
+        {
+            QVERIFY2(!ids.contains(element.attribute(QStringLiteral("id"))), qPrintable(element.attribute("id")));
+            ids.insert(element.attribute(QStringLiteral("id")));
+        }
+    }
+    for (int i = 0; i < all.size(); ++i)
+    {
+        const QDomElement element = all.at(i).toElement();
+        for (const QString &reference : {QStringLiteral("basePoint"), QStringLiteral("idObject"),
+                                         QStringLiteral("pSpline"), QStringLiteral("firstPoint"),
+                                         QStringLiteral("secondPoint"), QStringLiteral("path")})
+        {
+            if (element.hasAttribute(reference))
+            {
+                QVERIFY2(ids.contains(element.attribute(reference)),
+                         qPrintable(element.tagName() + QLatin1Char(' ') + reference));
+            }
+        }
+    }
+
+    // A notch, the hem's allowance on its nodes, an internal path and an anchor.
+    const QString text = QString::fromUtf8(xml);
+    QVERIFY(text.contains(QStringLiteral("notch=\"true\"")));
+    QVERIFY(text.contains(QStringLiteral("after=\"3\"")));
+    QVERIFY(text.contains(QStringLiteral("before=\"3\"")));
+    QVERIFY(text.contains(QStringLiteral("type=\"anchor\"")));
+    QVERIFY(text.contains(QStringLiteral("<iPaths>")));
+
+    // Valid against Seamly2D's pattern schema.
+    const QString schema = QFINDTESTDATA("../../libs/ifc/schema/pattern/v0.7.5.xsd");
+    if (schema.isEmpty() || QStandardPaths::findExecutable(QStringLiteral("xmllint")).isEmpty())
+    {
+        QSKIP("xmllint or the schema is not available");
+    }
+    QTemporaryDir dir;
+    const QString file = dir.filePath(QStringLiteral("imported.val"));
+    QString error;
+    QVERIFY2(DxfPatternConverter::convert(pattern, options, file, &error), qPrintable(error));
+    QProcess xmllint;
+    xmllint.start(QStringLiteral("xmllint"), {QStringLiteral("--noout"), QStringLiteral("--schema"), schema, file});
+    QVERIFY(xmllint.waitForFinished(30000));
+    QVERIFY2(xmllint.exitCode() == 0, xmllint.readAllStandardError().constData());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfConverterRebuildsOutline()
+{
+    // Rebuild the front's seam line the way Seamly2D does, from the file alone: the base point, each point at its
+    // length and angle from the one before, and the spline paths from their handle angles and lengths. It must lie
+    // on the original half circle and sides.
+    DxfReader reader;
+    DxfDocument document;
+    QVERIFY(reader.parse(aamaTestDxf(), document));
+    const DxfPattern pattern = DxfPatternReader::extract(document);
+
+    for (const bool fromPrevious : {true, false})
+    {
+        DxfImportOptions options;
+        options.sourceUnit = pattern.unit;
+        options.targetUnit = QStringLiteral("cm");
+        options.fromPreviousPoint = fromPrevious;
+        QDomDocument dom;
+        QVERIFY(dom.setContent(DxfPatternConverter::write(DxfPatternConverter::prepare(pattern, options), options)));
+        const QDomElement calculation = dom.documentElement()
+                                            .firstChildElement(QStringLiteral("draftBlock"))
+                                            .firstChildElement(QStringLiteral("calculation"));
+
+        QHash<QString, QPointF> points;
+        for (QDomElement e = calculation.firstChildElement(QStringLiteral("point")); !e.isNull();
+             e = e.nextSiblingElement(QStringLiteral("point")))
+        {
+            if (e.attribute(QStringLiteral("type")) == QLatin1String("single"))
+            {
+                points.insert(e.attribute(QStringLiteral("id")),
+                              QPointF(e.attribute(QStringLiteral("x")).toDouble(), e.attribute(QStringLiteral("y")).toDouble()));
+                continue;
+            }
+            QCOMPARE(e.attribute(QStringLiteral("type")), QStringLiteral("endLine"));
+            const QPointF base = points.value(e.attribute(QStringLiteral("basePoint")));
+            QLineF line(base, base + QPointF(100, 0));
+            line.setAngle(e.attribute(QStringLiteral("angle")).toDouble());
+            line.setLength(e.attribute(QStringLiteral("length")).toDouble());
+            points.insert(e.attribute(QStringLiteral("id")), line.p2());
+        }
+
+        // The seam line: the outline's points in the piece's node order; lines between consecutive points, curves
+        // where a spline path node is.
+        QHash<QString, QString> modelOf;
+        const QDomElement modeling = calculation.nextSiblingElement(QStringLiteral("modeling"));
+        for (QDomElement e = modeling.firstChildElement(); !e.isNull(); e = e.nextSiblingElement())
+        {
+            modelOf.insert(e.attribute(QStringLiteral("id")), e.attribute(QStringLiteral("idObject")));
+        }
+        QHash<QString, QDomElement> splines;
+        for (QDomElement e = calculation.firstChildElement(QStringLiteral("spline")); !e.isNull();
+             e = e.nextSiblingElement(QStringLiteral("spline")))
+        {
+            splines.insert(e.attribute(QStringLiteral("id")), e);
+        }
+
+        QPolygonF rebuilt;
+        const QDomElement nodes = dom.documentElement()
+                                      .firstChildElement(QStringLiteral("draftBlock"))
+                                      .firstChildElement(QStringLiteral("pieces"))
+                                      .firstChildElement(QStringLiteral("piece"))
+                                      .firstChildElement(QStringLiteral("nodes"));
+        for (QDomElement node = nodes.firstChildElement(); !node.isNull(); node = node.nextSiblingElement())
+        {
+            const QString object = modelOf.value(node.attribute(QStringLiteral("idObject")));
+            if (node.attribute(QStringLiteral("type")) == QLatin1String("NodePoint"))
+            {
+                rebuilt.append(points.value(object));
+                continue;
+            }
+            const QDomElement spline = splines.value(object);
+            QVector<QDomElement> pathPoints;
+            for (QDomElement p = spline.firstChildElement(); !p.isNull(); p = p.nextSiblingElement())
+            {
+                pathPoints.append(p);
+            }
+            for (int k = 0; k + 1 < pathPoints.size(); ++k)
+            {
+                const QPointF p0 = points.value(pathPoints.at(k).attribute(QStringLiteral("pSpline")));
+                const QPointF p3 = points.value(pathPoints.at(k + 1).attribute(QStringLiteral("pSpline")));
+                QLineF c1(p0, p0 + QPointF(100, 0));
+                c1.setAngle(pathPoints.at(k).attribute(QStringLiteral("angle2")).toDouble());
+                c1.setLength(pathPoints.at(k).attribute(QStringLiteral("length2")).toDouble());
+                QLineF c2(p3, p3 + QPointF(100, 0));
+                c2.setAngle(pathPoints.at(k + 1).attribute(QStringLiteral("angle1")).toDouble());
+                c2.setLength(pathPoints.at(k + 1).attribute(QStringLiteral("length1")).toDouble());
+                for (int i = 1; i < 32; ++i)
+                {
+                    const double t = i / 32.0;
+                    const double s = 1 - t;
+                    rebuilt.append(p0 * (s * s * s) + c1.p2() * (3 * s * s * t) + c2.p2() * (3 * s * t * t)
+                                   + p3 * (t * t * t));
+                }
+            }
+        }
+
+        // The original seam line, as placed: the layout puts the cut line's left and top at 0. The cut line is 1 cm
+        // left of the seam line, and its half circle 1 cm above (the seam line's top is at -40).
+        QPolygonF original = frontSeamLine();
+        original.translate(1, 41);
+        QVERIFY(rebuilt.size() > 20);
+        double worst = 0;
+        for (const QPointF &p : rebuilt)
+        {
+            worst = qMax(worst, distanceToPolygon(p, original));
+        }
+        QVERIFY2(worst < 0.06, qPrintable(QStringLiteral("%1 cm off (from previous point: %2)").arg(worst).arg(fromPrevious)));
+        // and covers all of it
+        for (const QPointF &p : original)
+        {
+            QVERIFY(distanceToPolygon(p, rebuilt) < 0.06);
+        }
+        // Clockwise on screen (Y down), as Seamly2D wants the main path.
+        double area = 0;
+        for (int i = 0; i < rebuilt.size(); ++i)
+        {
+            const QPointF &a = rebuilt.at(i);
+            const QPointF &b = rebuilt.at((i + 1) % rebuilt.size());
+            area += a.x() * b.y() - b.x() * a.y();
+        }
+        QVERIFY(area > 0);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::dxfImportWizardConverts()
+{
+    QTemporaryDir dir;
+    const QString dxf = dir.filePath(QStringLiteral("shirt.dxf"));
+    {
+        QFile file(dxf);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write(aamaTestDxf());
+    }
+
+    DxfImportWizard wizard(QStringLiteral("inch"));
+    QSignalSpy converted(&wizard, &DxfImportWizard::patternConverted);
+    wizard.setFileName(dxf);
+    wizard.restart();
+    wizard.next(); // reads the file
+    QCOMPARE(wizard.pattern().pieces.size(), 2);
+    QCOMPARE(wizard.options().sourceUnit, QStringLiteral("mm"));
+    QCOMPARE(wizard.options().targetUnit, QStringLiteral("inch")); // Seamly2D's units by default
+    wizard.next();
+    wizard.next(); // save page: next to the DXF, with its name
+    QCOMPARE(wizard.outputFileName(), dir.filePath(QStringLiteral("shirt.val")));
+
+    wizard.accept();
+    QCOMPARE(converted.count(), 1);
+    QCOMPARE(converted.constFirst().at(0).toString(), dir.filePath(QStringLiteral("shirt.val")));
+    QVERIFY(converted.constFirst().at(1).toBool());
+    QFile result(dir.filePath(QStringLiteral("shirt.val")));
+    QVERIFY(result.open(QIODevice::ReadOnly));
+    QVERIFY(result.readAll().contains("<unit>inch</unit>"));
+
+    // A file that is not a DXF stays on the first page.
+    DxfImportWizard other(QStringLiteral("cm"));
+    const QString text = dir.filePath(QStringLiteral("notes.dxf"));
+    {
+        QFile file(text);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("not a drawing");
+    }
+    other.setFileName(text);
+    other.restart();
+    const int first = other.currentId();
+    other.next();
+    QCOMPARE(other.currentId(), first);
 }
 
 QTEST_MAIN(TST_Seamly3D)

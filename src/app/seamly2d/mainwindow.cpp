@@ -227,7 +227,8 @@ MainWindow::MainWindow(QWidget *parent)
         }
 
         createActions();
-        Seamly3D::Workspace3DIntegration::install(this); // Adds View > 3D Workspace.
+        // Adds View > 3D Workspace and File > Import DXF Pattern.
+        Seamly3D::Workspace3DIntegration::install(this, [this](const QString &file) { return LoadPattern(file); });
         initializeScenes();
 
         // Create instance of VPattern (a dom document) that represents the XML documnet.

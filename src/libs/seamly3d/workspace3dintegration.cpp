@@ -30,10 +30,13 @@
 #include <QDockWidget>
 #include <QMainWindow>
 #include <QMenu>
+#include <QCoreApplication>
 #include <QMenuBar>
+#include <QProcess>
 #include <QOpenGLWidget>
 #include <QSignalBlocker>
 
+#include "dxfimport/dxfimportwizard.h"
 #include "measurementguide.h"
 #include "patternsource.h"
 #include "workspace3dwindow.h"
@@ -44,13 +47,15 @@ namespace
 // untouched.
 const QString hostViewMenuName = QStringLiteral("view_Menu");
 const QString hostHelpMenuName = QStringLiteral("help_Menu");
+const QString hostFileMenuName = QStringLiteral("file_Menu");
+const QString hostOpenActionName = QStringLiteral("actionOpen");
 } // anonymous namespace
 
 namespace Seamly3D
 {
 
 //---------------------------------------------------------------------------------------------------------------------
-Workspace3DIntegration *Workspace3DIntegration::install(QMainWindow *host)
+Workspace3DIntegration *Workspace3DIntegration::install(QMainWindow *host, const PatternOpener &openPattern)
 {
     if (host == nullptr)
     {
@@ -62,14 +67,15 @@ Workspace3DIntegration *Workspace3DIntegration::install(QMainWindow *host)
     {
         return existing;
     }
-    return new Workspace3DIntegration(host);
+    return new Workspace3DIntegration(host, openPattern);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-Workspace3DIntegration::Workspace3DIntegration(QMainWindow *host)
+Workspace3DIntegration::Workspace3DIntegration(QMainWindow *host, const PatternOpener &openPattern)
     : QObject(host)
     , m_host(host)
     , m_action(new QAction(tr("3D Workspace"), this))
+    , m_openPattern(openPattern)
 {
     // The 3D viewport is an OpenGL widget. Adding the first one to a window already on screen makes Qt destroy and
     // recreate that window (to draw it through OpenGL), so the whole main window would vanish and come back when the
@@ -114,6 +120,52 @@ Workspace3DIntegration::Workspace3DIntegration(QMainWindow *host)
         helpMenu->insertAction(helpMenu->actions().value(0), guideAction);
         helpMenu->insertSeparator(helpMenu->actions().value(1));
     }
+
+    // File > Import DXF Pattern..., right after Open.
+    if (auto *fileMenu = host->findChild<QMenu *>(hostFileMenuName))
+    {
+        auto *importAction = new QAction(tr("Import DXF Pattern..."), this);
+        importAction->setObjectName(QStringLiteral("seamly3dImportDxf_Action"));
+        importAction->setToolTip(tr("Convert a DXF pattern (AAMA/ASTM, from another pattern CAD) into a Seamly2D "
+                                    "pattern"));
+        connect(importAction, &QAction::triggered, this, &Workspace3DIntegration::importDxfPattern);
+        QAction *before = nullptr;
+        const QList<QAction *> actions = fileMenu->actions();
+        for (int i = 0; i < actions.size(); ++i)
+        {
+            if (actions.at(i)->objectName() == hostOpenActionName)
+            {
+                before = actions.value(i + 1);
+                break;
+            }
+        }
+        fileMenu->insertAction(before, importAction);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DIntegration::importDxfPattern()
+{
+    DxfImportWizard wizard(PatternSource::defaultUnit(), m_host);
+    connect(&wizard, &DxfImportWizard::patternConverted, this,
+            [this](const QString &fileName, bool open)
+            {
+                if (!open)
+                {
+                    return;
+                }
+                // The host opens it (in a new window when it already has a pattern); without a host function, a new
+                // Seamly2D does.
+                if (m_openPattern)
+                {
+                    m_openPattern(fileName);
+                }
+                else
+                {
+                    QProcess::startDetached(QCoreApplication::applicationFilePath(), {fileName});
+                }
+            });
+    wizard.exec();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

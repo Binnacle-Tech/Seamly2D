@@ -12,11 +12,12 @@ These are the only changes to existing files:
 |------|--------|
 | `src/libs/libs.pro` | adds the `seamly3d` subdir |
 | `src/app/seamly2d/seamly2d.pro` | `QT += opengl openglwidgets` and links `libseamly3d` |
-| `src/app/seamly2d/mainwindow.cpp` | one include and one `Seamly3D::Workspace3DIntegration::install(this)` call |
+| `src/app/seamly2d/mainwindow.cpp` | one include and one `Seamly3D::Workspace3DIntegration::install(...)` call, which passes `LoadPattern` so converted DXF patterns open in the main window |
 | `src/test/test.pro` | adds the `Seamly3DTest` subdir |
 
-`Workspace3DIntegration` finds the host's View and Help menus at runtime by
-object name (`view_Menu`, `help_Menu`), so `mainwindow.ui` doesn't change.
+`Workspace3DIntegration` finds the host's File, View and Help menus at runtime
+by object name (`file_Menu`, `view_Menu`, `help_Menu`), so `mainwindow.ui`
+doesn't change.
 **View > 3D Workspace** shows the workspace as a dock of the main window,
 beside the 2D pattern. You can float it out to its own window or screen.
 
@@ -51,6 +52,8 @@ context on Windows, macOS and Linux.
 | `ClothSimulator`, `BodyCollider` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
 | `Workspace3DIntegration` | The single hook into the 2D main window. |
+| `DxfReader`, `DxfPatternReader` (`dxfimport/`) | Reads ASCII DXF (blocks, polylines with arcs, splines, ellipses, text) and finds the pattern pieces: AAMA/ASTM layers, or closed outlines. |
+| `OutlineFitter`, `DxfPatternConverter`, `DxfImportWizard` (`dxfimport/`) | Fits outlines with corners, lines and smooth curves, writes them as a parametric Seamly2D pattern (`.val`), and the wizard around it. |
 | `MakeHumanData`, `MakeHumanBody`, `MakeHumanFitter` (`makehuman/`) | Realistic body: MakeHuman's base mesh and targets, fitted to the measurements. AGPL port, see `makehuman/README.md`. |
 
 Unit tests for everything except the GL widgets are in `src/test/Seamly3DTest`.
@@ -180,6 +183,41 @@ Not there yet: collars and waistbands sewn to necklines (pieces hung beside
 the body are not sewn), self collision (cloth folding through itself), fabric
 presets, and editing the seams by hand.
 
+### Importing DXF patterns
+
+**File > Import DXF Pattern...** converts a DXF pattern into a parametric
+Seamly2D pattern and opens it. It reads AAMA / ASTM D6673 files, which most
+pattern CAD systems export (Gerber, Lectra, Optitex, CLO, Seamly2D...), and
+any other DXF drawing of pattern pieces.
+
+* **What it reads:** one piece per block. Cut line (layer 1), turn points (2),
+  curve points (3), notches (4), mirror or fold line (6), grain line (7),
+  internal lines (8, 11), drill holes (13), sew line (14), and texts such as
+  `Piece Name:` and `Quantity:`. Units come from `UNITS:` in the file, then
+  from `$INSUNITS`, otherwise they are guessed from the size of the pieces.
+  For a plain DXF, every outermost closed outline is a piece. An outline
+  running parallel inside it is its sew line, and anything else inside is an
+  internal line. Lines and curves drawn end to end are joined.
+* **What it makes:** each piece gets its own draft block. Its first corner is
+  a base point, and every other point sits at a length and an angle from the
+  point before it (or from the base point, if you choose that). So you can
+  edit it, or replace the numbers with formulas, like any drafted pattern.
+  Corners are the file's turn points and anywhere the outline turns sharply.
+  Long edges stay straight lines. Curves become spline paths through the
+  file's curve points, plus as few extra points as it takes to stay within
+  0.5 mm of the file (you can change that). Notches, the grain line, quantity,
+  fold, internal lines (as internal paths) and drill holes (as anchor points)
+  carry over.
+* **Seam allowance:** when the file has a sew line, it becomes the seam line,
+  and the allowance is measured edge by edge up to the cut line, so a 3 cm
+  hem keeps its 3 cm. Without a sew line, the cut line is kept with the
+  allowance included. You can instead treat the cut line as the seam line
+  and add an allowance.
+* **The wizard:** choose the file, check the pieces and their names (with a
+  preview of each converted piece), choose units and options, then pick
+  where to save. The pattern opens when you're done.
+* Binary DXF isn't supported: save it as ASCII DXF first.
+
 ### How to measure
 
 The **How to measure** box under the measurement fields shows the Seamly2D
@@ -233,6 +271,8 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [x] Arrangement around the avatar (front, back, sides, sleeves along the
      arms, pieces beside the body), pairs for pieces cut twice or on the fold
    - [ ] Drag pieces in 3D; use grainlines and notches for orientation
+   - [x] Import DXF patterns from other CAD systems (AAMA/ASTM) as
+     parametric Seamly2D patterns
 3. **Sewing**
    - [x] Seams found automatically between piece edges: one to one (sides,
      shoulders, folds, darts, underarms) and sleeve caps into armholes
