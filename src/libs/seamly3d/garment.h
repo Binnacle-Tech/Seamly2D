@@ -53,6 +53,7 @@ struct GarmentPanel
     QString      name{};
     QColor       color{};
     bool         sewable{true};    ///< false for pieces hung beside the body
+    bool         band{false};      ///< a waistband or collar: its lower edge is sewn along a waistline or neckline
     Mesh         rest{};
     Mesh         shape{};
     int          outlineCount{0};
@@ -96,6 +97,10 @@ struct Seam
  * Then sleeves are set in: an edge left over that bulges out (a sleeve cap) is sewn to two edges left over that curve
  * in (the front and back armholes) on the same side of the body, when it is as long as both together or up to 15%
  * longer (the ease). The cap's ends meet at the underarm, its middle at the shoulder.
+ *
+ * Last, waistbands and collars are sewn on: the lower long edge of the band along every edge left open within reach
+ * of it (the waistlines of a skirt or trousers, the necklines of a bodice), in order around the body, each edge taking
+ * a share of the band as long as itself. Half a band takes only the edges on its side of the body.
  */
 class SeamFinder
 {
@@ -105,6 +110,7 @@ public:
     static constexpr double lengthTolerance = 0.05; ///< relative
     static constexpr double maxDistance = 35.0;     ///< centimeters between the edges once arranged
     static constexpr double closeMiddles = 10.0;    ///< centimeters: two edges curving in this close are sewn
+    static constexpr float  bandReach = 20.0f;      ///< centimeters from a band to the edges it is sewn to
 };
 
 } // namespace Seamly3D

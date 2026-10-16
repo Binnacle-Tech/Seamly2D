@@ -237,6 +237,10 @@ private slots:
     void arrangementWrapsLegs();
     void bodyFrameFindsLegs();
     void clothHoldsSkirtAtWaist();
+    void arrangementWrapsBands();
+    void bodyFrameFindsNeckAndWaist();
+    void seamFinderSewsWaistband();
+    void seamFinderSewsCollar();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
     void seamFinderSewsDart();
@@ -1359,13 +1363,17 @@ void TST_Seamly3D::arrangementGuess_data()
     QTest::newRow("back") << "Back" << static_cast<int>(PiecePlacement::Back);
     QTest::newRow("sleeve") << "Sleeve" << static_cast<int>(PiecePlacement::LeftSleeve);
     QTest::newRow("german back") << "Rückenteil" << static_cast<int>(PiecePlacement::Back);
-    QTest::newRow("collar") << "Collar" << static_cast<int>(PiecePlacement::Aside);
+    QTest::newRow("collar") << "Collar" << static_cast<int>(PiecePlacement::Collar);
+    QTest::newRow("french collar") << "Col" << static_cast<int>(PiecePlacement::Collar);
+    QTest::newRow("cuff") << "Cuff" << static_cast<int>(PiecePlacement::Aside);
+    QTest::newRow("pocket") << "Back pocket" << static_cast<int>(PiecePlacement::Aside);
     QTest::newRow("trouser front") << "Trouser front" << static_cast<int>(PiecePlacement::LeftLegFront);
     QTest::newRow("pants back") << "Pants back" << static_cast<int>(PiecePlacement::LeftLegBack);
     QTest::newRow("german trousers") << "Hose Vorderteil" << static_cast<int>(PiecePlacement::LeftLegFront);
     QTest::newRow("skirt front") << "Skirt front" << static_cast<int>(PiecePlacement::LowerFront);
     QTest::newRow("skirt back") << "Skirt back" << static_cast<int>(PiecePlacement::LowerBack);
-    QTest::newRow("waistband") << "Skirt waistband" << static_cast<int>(PiecePlacement::Aside);
+    QTest::newRow("waistband") << "Skirt waistband" << static_cast<int>(PiecePlacement::Waistband);
+    QTest::newRow("german waistband") << "Bund" << static_cast<int>(PiecePlacement::Waistband);
     QTest::newRow("unknown") << "Piece 7" << static_cast<int>(PiecePlacement::Aside);
 }
 
@@ -1628,6 +1636,19 @@ PatternPiece skirtPiece(quint32 id, const QString &name, double length = 60)
     piece.corners << 0 << 1 << 3 << 4;
     o << QPointF(0, 0) << QPointF(19.5, 0) << QPointF(26, 20) << QPointF(26 + 6 * (length - 20) / 40, length)
       << QPointF(0, length);
+    return piece;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief A band (waistband, collar): @p length long, @p width wide, corners at its four corners. */
+PatternPiece bandPiece(quint32 id, const QString &name, double length, double width, bool onFold)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = name;
+    piece.onFold = onFold;
+    piece.seamLine << QPointF(0, 0) << QPointF(length, 0) << QPointF(length, width) << QPointF(0, width);
+    piece.corners << 0 << 1 << 2 << 3;
     return piece;
 }
 
@@ -2061,6 +2082,159 @@ void TST_Seamly3D::clothHoldsSkirtAtWaist()
     const auto hips = static_cast<float>(measurements.value(BodyMeasurement::HipHeight));
     QVERIFY2(height > hips + 8, qPrintable(QStringLiteral("waistline at %1, hips at %2").arg(height).arg(hips)));
     QVERIFY2(waist < flat * 1.08f, qPrintable(QStringLiteral("waistline %1 cm, %2 flat").arg(waist).arg(flat)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementWrapsBands()
+{
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+
+    // A whole waistband, 78 cm: a ring around the waist, its ends at the center front, its lower edge where the top
+    // of a skirt is.
+    const PatternPiece waistband = bandPiece(1, QStringLiteral("Waistband"), 78, 4, false);
+    const Mesh flat = PieceMesher::mesh(waistband.seamLine, 2.5);
+    const QVector<Mesh> ring =
+        PieceArrangement::place(flat, waistband.seamLine.boundingRect(), PiecePlacement::Waistband, false, false, frame);
+    QCOMPARE(ring.size(), 1);
+    const float radius = qMax(78.0f / (2 * static_cast<float>(M_PI)), frame.waistRadius + 1);
+    float lowest = std::numeric_limits<float>::max();
+    for (int v = 0; v < flat.positions.size(); ++v)
+    {
+        const QVector3D p = ring.at(0).positions.at(v);
+        const QVector3D fromAxis(p.x() - frame.waistCenter.x(), 0, p.z() - frame.waistCenter.z());
+        QVERIFY(qAbs(fromAxis.length() - radius) < 1e-3f);
+        lowest = qMin(lowest, p.y());
+        if (flat.positions.at(v).x() < 1e-4f) // the start: at the center front
+        {
+            QVERIFY(qAbs(p.x()) < 1e-3f && p.z() > 0);
+        }
+    }
+    QVERIFY(qAbs(lowest - (frame.waistHeight + 2)) < 1e-3f);
+
+    // Half a collar, cut on the fold: from the center back round one side to the front, the mirrored copy round the
+    // other side.
+    const PatternPiece collar = bandPiece(2, QStringLiteral("Collar"), 20, 4, true);
+    const Mesh collarFlat = PieceMesher::mesh(collar.seamLine, 2.5);
+    const QVector<Mesh> halves =
+        PieceArrangement::place(collarFlat, collar.seamLine.boundingRect(), PiecePlacement::Collar, true, false, frame);
+    QCOMPARE(halves.size(), 2);
+    for (int v = 0; v < collarFlat.positions.size(); ++v)
+    {
+        const QVector3D a = halves.at(0).positions.at(v);
+        const QVector3D b = halves.at(1).positions.at(v);
+        QVERIFY(a.x() >= frame.neckCenter.x() - 1e-3f);
+        QVERIFY(qAbs((a.x() - frame.neckCenter.x()) + (b.x() - frame.neckCenter.x())) < 1e-3f);
+        QVERIFY(a.y() >= frame.neckBaseHeight - 1e-3f && a.y() <= frame.neckBaseHeight + 4 + 1e-3f);
+        if (collarFlat.positions.at(v).x() < 1e-4f) // the fold: at the center back
+        {
+            QVERIFY(a.z() < frame.neckCenter.z());
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::bodyFrameFindsNeckAndWaist()
+{
+    const BodyMeasurements measurements;
+    const MakeHumanFit fit = MakeHumanFitter::fit(measurements);
+    QVERIFY(fit.valid);
+    const BodyFrame guessed = BodyFrame::fromMeasurements(measurements);
+    const BodyFrame frame = guessed.withNeckAndWaist(fit.mesh);
+
+    // The body is fitted to the girths, so the loops cut there are about as long.
+    const auto radius = [&measurements](BodyMeasurement m) { return measurements.value(m) / (2 * M_PI); };
+    QVERIFY2(qAbs(frame.neckRadius - radius(BodyMeasurement::NeckCirc)) < 1.0,
+             qPrintable(QStringLiteral("%1 %2").arg(frame.neckRadius).arg(radius(BodyMeasurement::NeckCirc))));
+    QVERIFY2(qAbs(frame.waistRadius - radius(BodyMeasurement::WaistCirc)) < 1.0,
+             qPrintable(QStringLiteral("%1 %2").arg(frame.waistRadius).arg(radius(BodyMeasurement::WaistCirc))));
+    QVERIFY(qAbs(frame.neckCenter.x()) < 1.0f && qAbs(frame.waistCenter.x()) < 1.0f);
+    QVERIFY(qAbs(frame.neckCenter.y() - frame.neckBaseHeight) < 1e-3f);
+
+    QCOMPARE(guessed.withNeckAndWaist(Mesh()).neckCenter, guessed.neckCenter);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsWaistband()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {skirtPiece(1, QStringLiteral("Skirt front")), skirtPiece(2, QStringLiteral("Skirt back")),
+                          bandPiece(3, QStringLiteral("Waistband"), 78, 4, false)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 5);
+    QVERIFY(panels.constLast().band);
+
+    // The skirt's own four seams, then the band along the four waistlines, all the way round in order.
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    QCOMPARE(seams.size(), 8);
+    QVector<Seam> band;
+    for (const Seam &seam : seams)
+    {
+        if (seam.panelA == 4)
+        {
+            band.append(seam);
+            QCOMPARE(seam.edgeB, 0); // a waistline
+        }
+    }
+    QCOMPARE(band.size(), 4);
+    std::sort(band.begin(), band.end(), [](const Seam &a, const Seam &b) { return a.startA < b.startA; });
+    QVERIFY(band.constFirst().startA < 0.05);
+    QVERIFY(band.constLast().endA > 0.95);
+    QVector<double> angles;
+    for (int i = 0; i < band.size(); ++i)
+    {
+        QCOMPARE(band.at(i).edgeA, band.constFirst().edgeA);
+        if (i > 0)
+        {
+            QVERIFY(qAbs(band.at(i).startA - band.at(i - 1).endA) < 1e-9); // no gaps, no overlaps
+        }
+        // Around the body the way the band goes, from the center front.
+        const GarmentPanel &waistline = panels.at(band.at(i).panelB);
+        const QVector<int> vertices = waistline.edgeVertices(band.at(i).edgeB);
+        const QVector3D middle = waistline.shape.positions.at(vertices.at(vertices.size() / 2));
+        double angle = std::atan2(static_cast<double>(middle.x()), static_cast<double>(middle.z()));
+        if (angle < 0)
+        {
+            angle += 2 * M_PI;
+        }
+        angles.append(angle);
+    }
+    const bool increasing = std::is_sorted(angles.cbegin(), angles.cend());
+    const bool decreasing = std::is_sorted(angles.crbegin(), angles.crend());
+    QVERIFY2(increasing || decreasing, qPrintable(QStringLiteral("%1 %2 %3 %4").arg(angles.at(0)).arg(angles.at(1))
+                                                      .arg(angles.at(2)).arg(angles.at(3))));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsCollar()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          tshirtSleeve(3), bandPiece(4, QStringLiteral("Collar"), 19.5, 4, true)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 8);
+
+    // The shirt's twelve seams, then each half collar along the front and back necklines on its side.
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    QCOMPARE(seams.size(), 16);
+    int collarParts = 0;
+    for (const Seam &seam : seams)
+    {
+        const GarmentPanel &a = panels.at(seam.panelA);
+        if (!a.band)
+        {
+            continue;
+        }
+        ++collarParts;
+        const GarmentPanel &b = panels.at(seam.panelB);
+        QCOMPARE(seam.edgeB, static_cast<int>(Neck));
+        QVERIFY(b.pieceId == 1 || b.pieceId == 2);
+        QVERIFY(a.shape.bounds().center().x() * b.shape.bounds().center().x() > 0); // same side
+    }
+    QCOMPARE(collarParts, 4);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

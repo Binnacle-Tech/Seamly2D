@@ -167,6 +167,48 @@ Mesh legPiece(const Mesh &flat, const QRectF &bounds, PiecePlacement placement, 
     return mesh;
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief bandPiece wraps a waistband or a collar lengthwise around the waist or the neck. */
+Mesh bandPiece(const Mesh &flat, const QRectF &bounds, PiecePlacement placement, bool half, bool mirrored, bool flip,
+               const BodyFrame &frame)
+{
+    // Along the band and across it, from its top; a band drawn upright is turned (its left side on top).
+    const bool lengthwise = bounds.width() >= bounds.height();
+    const auto length = static_cast<float>(lengthwise ? bounds.width() : bounds.height());
+    const auto width = static_cast<float>(lengthwise ? bounds.height() : bounds.width());
+    const auto along = [&bounds, lengthwise](const QVector3D &p)
+    { return static_cast<float>(lengthwise ? p.x() - bounds.left() : p.y() - bounds.top()); };
+    const auto down = [&bounds, lengthwise](const QVector3D &p)
+    { return static_cast<float>(lengthwise ? p.y() - bounds.top() : bounds.right() - p.x()); };
+
+    const bool collar = placement == PiecePlacement::Collar;
+    const QVector3D center = collar ? frame.neckCenter : frame.waistCenter;
+    const float bottom = collar ? frame.neckBaseHeight : frame.waistHeight + waistLift;
+    // Round enough to close the ring, but not inside the body.
+    const float round = half ? 2 * length : length;
+    const float radius = qMax(round / (2 * static_cast<float>(M_PI)),
+                              (collar ? frame.neckRadius : frame.waistRadius) + 1.0f);
+
+    Mesh mesh = flat;
+    for (QVector3D &p : mesh.positions)
+    {
+        float t = along(p);
+        if (flip)
+        {
+            t = length - t;
+        }
+        // A whole band starts and ends at the center front; half a band runs from the center back to the front.
+        float angle = half ? static_cast<float>(M_PI) - t / radius : t / radius;
+        if (mirrored)
+        {
+            angle = -angle;
+        }
+        p = QVector3D(center.x() + radius * qSin(angle), bottom + width - down(p), center.z() + radius * qCos(angle));
+    }
+    mesh.computeNormals();
+    return mesh;
+}
+
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -204,6 +246,63 @@ BodyFrame BodyFrame::fromMeasurements(const BodyMeasurements &measurements)
     const float legX = qMax(frame.thighRadius, radius(BodyMeasurement::HipCirc) * 0.5f);
     frame.leftHip = QVector3D(legX, frame.crotchHeight, 0);
     frame.leftKnee = QVector3D(legX + 1.0f, frame.kneeHeight, 0);
+
+    frame.neckBaseHeight = value(BodyMeasurement::NeckBackHeight);
+    frame.neckRadius = radius(BodyMeasurement::NeckCirc);
+    frame.waistRadius = radius(BodyMeasurement::WaistCirc);
+    frame.neckCenter = QVector3D(0, frame.neckBaseHeight, 0);
+    frame.waistCenter = QVector3D(0, frame.waistHeight, 0);
+    return frame;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+BodyFrame BodyFrame::withNeckAndWaist(const Mesh &body) const
+{
+    // The loop nearest the center line at that height: the arms hang farther out.
+    const auto loop = [&body](float height, QVector3D *center, float *radius)
+    {
+        float nearest = std::numeric_limits<float>::max();
+        for (const MeshSlicer::Contour &contour : MeshSlicer::sliceAtHeight(body, height))
+        {
+            if (!contour.closed || contour.points.size() < 3 || contour.length() < 10.0)
+            {
+                continue;
+            }
+            QVector3D sum;
+            double length = 0;
+            for (int i = 0; i < contour.points.size(); ++i)
+            {
+                const QVector3D &a = contour.points.at(i);
+                const QVector3D &b = contour.points.at((i + 1) % contour.points.size());
+                const float segment = (b - a).length();
+                sum += (a + b) / 2 * segment;
+                length += static_cast<double>(segment);
+            }
+            const QVector3D middle = sum / static_cast<float>(length);
+            if (qAbs(middle.x()) < nearest)
+            {
+                nearest = qAbs(middle.x());
+                *center = middle;
+                *radius = static_cast<float>(length / (2 * M_PI));
+            }
+        }
+        return nearest < 5.0f;
+    };
+
+    BodyFrame frame = *this;
+    QVector3D center;
+    float radius = 0;
+    // Above the back of the neck, where the neck is measured: lower, the cut runs into the shoulders.
+    if (loop(neckBaseHeight + 4.0f, &center, &radius))
+    {
+        frame.neckCenter = QVector3D(center.x(), neckBaseHeight, center.z());
+        frame.neckRadius = radius;
+    }
+    if (loop(waistHeight, &center, &radius))
+    {
+        frame.waistCenter = center;
+        frame.waistRadius = radius;
+    }
     return frame;
 }
 
@@ -326,8 +425,16 @@ PiecePlacement PieceArrangement::guess(const QString &name)
     {
         return PiecePlacement::LeftSleeve;
     }
-    if (has({"collar", "pocket", "cuff", "facing", "band", "belt", "yoke", "kragen", "tasche", "col", "poche",
-             "cuello", "bolsillo", "kraag", "zak"}))
+    if (has({"waistband", "waist band", "bund", "ceinture", "cintur", "pretina", "tailleband"}))
+    {
+        return PiecePlacement::Waistband;
+    }
+    if (has({"collar", "neckband", "neck band", "kragen", "col ", "cuello", "kraag", "colletto"})
+        || n == QLatin1String("col"))
+    {
+        return PiecePlacement::Collar;
+    }
+    if (has({"pocket", "cuff", "facing", "band", "belt", "yoke", "tasche", "poche", "bolsillo", "zak"}))
     {
         return PiecePlacement::Aside;
     }
@@ -384,6 +491,10 @@ QString PieceArrangement::displayName(PiecePlacement placement)
             return tr("Right leg, front");
         case PiecePlacement::RightLegBack:
             return tr("Right leg, back");
+        case PiecePlacement::Waistband:
+            return tr("Waistband");
+        case PiecePlacement::Collar:
+            return tr("Collar");
         case PiecePlacement::Aside:
             return tr("Beside the body");
         case PiecePlacement::Hidden:
@@ -435,6 +546,16 @@ QVector<Mesh> PieceArrangement::place(const Mesh &flat, const QRectF &bounds, Pi
             result.append(wrap(flat, 0, 0, radius, angle, top, fromEdge, v));
             result.append(wrap(flat, 0, 0, radius, angle, top,
                                [&fromEdge](const QVector3D &p) { return -fromEdge(p); }, v));
+            break;
+        }
+        case PiecePlacement::Waistband:
+        case PiecePlacement::Collar:
+        {
+            result.append(bandPiece(flat, bounds, placement, pair, false, flip, frame));
+            if (pair)
+            {
+                result.append(bandPiece(flat, bounds, placement, true, true, flip, frame));
+            }
             break;
         }
         case PiecePlacement::LeftLegFront:

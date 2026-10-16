@@ -38,17 +38,17 @@ context on Windows, macOS and Linux.
 |-------|---------|
 | `BodyMeasurements` | The measurements behind the body, keyed by Seamly2D measurement names (`bust_circ`, `height_waist_side`, ...). Has defaults, rescales to a height, sanitizes bad input, and reads SeamlyMe `.vit` files in mm, cm or inch. |
 | `ParametricBody` | Builds a body (torso + head, legs, arms) that fits the measurements. Girths are exact. |
-| `MeshSlicer` | Cuts a mesh with a level plane, like a tape measure, and returns the girth. Proves the fit and is the basis for measuring garments later. |
+| `MeshSlicer` | Cuts a mesh with a level plane, like a tape measure, and returns the girth. Proves the fit, finds the legs, neck and waist of the body shown for arranging pieces, and is the basis for measuring garments later. |
 | `BodyMeasurementsPanel` | Form for your own measurements (cm or inch), or load them from a `.vit` file. |
 | `Mesh`, `Bounds3D` | Indexed triangle mesh, normals, bounds, interleaved GPU data. |
 | `ObjMeshReader` / `ObjMeshWriter` | Wavefront OBJ import of scanned or modeled bodies, and export of the generated body. |
-| `PolygonTriangulator` | Ear-clipping triangulation of 2D piece outlines, plus flat piece meshes. This is the first step toward putting pattern pieces into 3D. |
+| `PolygonTriangulator` | Ear-clipping triangulation of 2D piece outlines, plus flat piece meshes. |
 | `OrbitCamera` | Y-up turntable camera: orbit, pan, zoom, frame bounds. |
-| `Viewport3D` | `QOpenGLWidget` that draws the shaded mesh and a ground grid. Left drag orbits, Shift/right/middle drag pans, the wheel zooms. |
-| `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body. |
+| `Viewport3D` | `QOpenGLWidget` that draws the shaded body, the pieces or the draped garment (colored per piece or by a fit map), seam lines and a ground grid. Left drag orbits, Shift/right/middle drag pans, the wheel zooms. |
+| `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body, and runs the sewing and draping. |
 | `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
-| `PieceMesher`, `PieceArrangement`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body, and the panel to arrange them. |
-| `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (between the piece's own points), and the seams found between those edges. |
+| `PieceMesher`, `PieceArrangement`, `BodyFrame`, `PatternPiecesPanel` | Pieces turned into meshes and placed around the body (torso, arms, legs, waist, neck), and the panel to arrange them, edit the seams and choose the fabric and fit map. |
+| `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (the piece's sides), and the seams found between those edges: one to one, sleeve caps into armholes, waistbands and collars along waistlines and necklines. |
 | `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric. Gives the stretch and ease of the draped garment. |
 | `FitMap` | Colors for the fit maps and their legend. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
@@ -144,7 +144,7 @@ and draping:
 * Each piece becomes an even triangle mesh (2.5 cm), wrapped without
   stretching around a cylinder just outside the body (front, back, sides),
   or around the arm for sleeves, from the shoulder tip toward the wrist.
-  Collars, pockets and other pieces hang flat beside the body.
+  Pockets, cuffs, facings and other pieces hang flat beside the body.
 * **Skirts** (front or back, from the waist) wrap around the hips from the
   waist down. **Trouser legs** (left or right leg, front or back) wrap around
   the leg, the crease (the middle of the hem) in front of it or behind it,
@@ -152,9 +152,16 @@ and draping:
   center line. The side seam goes outside: it is the side the top of the
   piece leans to, the crotch extension sticking out on the other. The legs
   are found on the body shown, by cutting it at the thigh and the knee.
-* Where a piece goes is guessed from its name (front, back, sleeve, collar,
-  skirt, trouser, pants..., also in German, French, Spanish, Dutch and
-  Italian). You can change it per piece, or hide the piece.
+* **Waistbands** and **collars** go round the waist or the neck lengthwise,
+  their lower edge where the top of the skirt or trousers, or the neckline,
+  is. A band cut once is a whole ring, its ends at the center front; a band
+  cut twice or on the fold is half a ring from the center back to the front,
+  its mirrored copy the other half (**Flip** turns it end for end). The
+  waist and the neck are found on the body shown. A band drawn upright in
+  the pattern is turned, its left side on top.
+* Where a piece goes is guessed from its name (front, back, sleeve, skirt,
+  trouser, pants, waistband, collar..., also in German, French, Spanish,
+  Dutch and Italian). You can change it per piece, or hide the piece.
 * **Pair:** a piece cut twice or on the fold gets a mirrored copy, on the
   other side of the center line, on the other arm or on the other leg.
   **Flip** mirrors the piece when its center line (or, for a trouser leg,
@@ -182,8 +189,12 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   darts. Two edges that both curve in are sewn only when they already lie
   together: the inseams and crotch seams of trousers, but not armholes or
   necklines. A sleeve cap is set into the front and back armholes beside it,
-  with up to 15% ease. Necklines, waistlines (a straight top edge) and hems
-  stay open.
+  with up to 15% ease. Last, each waistband or collar is sewn on: its lower
+  edge along every edge still open within 20 cm of it (the waistlines, the
+  necklines), in order around the body, each edge taking a share of the band
+  as long as itself; half a band takes the edges on its side only. Without a
+  band, necklines and waistlines (a straight top edge) stay open; hems
+  always do.
 * **Seams list:** every seam, with its color. Uncheck a seam to leave it open;
   **Add Seam...** sews two edges you pick (each listed with its length, and
   shown in yellow in 3D while you choose; the ends that meet are chosen from
@@ -218,9 +229,10 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
     on the body, through yellow, to green and blue where it hangs 6 cm or
     more away.
 
-Not there yet: collars and waistbands sewn to necklines (pieces hung beside
-the body are not sewn), self collision (cloth folding through itself), a
-fabric per piece, and picking seam edges in 3D or on the 2D pieces. A
+Not there yet: collars that fold over (a collar is a stand, it stays up),
+pockets, cuffs and facings (pieces hung beside the body are not sewn), self
+collision (cloth folding through itself), a fabric per piece, and picking
+seam edges in 3D or on the 2D pieces. A
 waistline holding a garment up still stretches a few percent (about 4% for
 a skirt and 8% for trousers on the default body) where woven fabric would
 not, so it sits a little low.
@@ -322,18 +334,20 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [x] Read-only adapter that gets the pieces and measurements of the open
      pattern (`PatternSource`)
    - [x] Arrangement around the avatar (front, back, sides, sleeves along the
-     arms, skirts from the waist, trouser legs around the legs, pieces beside
-     the body), pairs for pieces cut twice or on the fold
+     arms, skirts from the waist, trouser legs around the legs, waistbands and
+     collars, pieces beside the body), pairs for pieces cut twice or on the
+     fold
    - [ ] Drag pieces in 3D; use grainlines and notches for orientation
    - [x] Import DXF patterns from other CAD systems (AAMA/ASTM) as
      parametric Seamly2D patterns
 3. **Sewing**
    - [x] Seams found automatically between piece edges: one to one (sides,
-     shoulders, folds, darts, underarms) and sleeve caps into armholes
+     shoulders, folds, darts, underarms, inseams, crotch seams), sleeve caps
+     into armholes, waistbands and collars along waistlines and necklines
    - [x] Seams list: switch seams off, add seams between two edges, seam
      lines drawn in 3D
    - [ ] Pick seam edges in 3D or on the 2D pieces, with notches as
-     alignment hints; collars and waistbands
+     alignment hints; cuffs, pockets, facings; collars that fold over
 4. **Cloth simulation**
    - [x] Even triangle mesh of each piece (Delaunay flips, longest edge
      bisection)

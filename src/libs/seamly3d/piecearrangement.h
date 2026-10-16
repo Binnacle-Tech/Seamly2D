@@ -55,6 +55,8 @@ enum class PiecePlacement : int
     LeftLegBack,
     RightLegFront,
     RightLegBack,
+    Waistband,     ///< Around the waist, sewn to the top of a skirt or trousers
+    Collar,        ///< Around the neck, sewn to the neckline
     Aside,     ///< Hung flat behind the body (collars, pockets, facings...)
     Hidden,
     Count
@@ -84,6 +86,11 @@ struct BodyFrame
     float ankleRadius{3.5f};
     QVector3D leftHip{9.0f, 76.0f, 0.0f};  ///< Left leg axis at the crotch
     QVector3D leftKnee{9.5f, 47.0f, 0.0f}; ///< Left leg axis at the knee
+    float neckBaseHeight{140.5f};  ///< where collars go: the back of the neck
+    float neckRadius{5.7f};        ///< neck and waist girths as radii, around their centers
+    float waistRadius{12.0f};
+    QVector3D neckCenter{0.0f, 140.5f, 0.0f};
+    QVector3D waistCenter{0.0f, 103.5f, 0.0f};
 
     /** @brief fromMeasurements estimates the frame; the arm is assumed in an A-pose, about 40 degrees out. */
     static BodyFrame fromMeasurements(const BodyMeasurements &measurements);
@@ -93,6 +100,9 @@ struct BodyFrame
 
     /** @brief withLegs finds the legs of the body shown, by cutting it at the thigh and the knee. */
     BodyFrame withLegs(const Mesh &body) const;
+
+    /** @brief withNeckAndWaist finds the neck and the waist of the body shown, by cutting it there. */
+    BodyFrame withNeckAndWaist(const Mesh &body) const;
 
     /** @brief legAxis returns the left leg axis at @p height. */
     QVector3D legAxis(float height) const;
@@ -112,6 +122,10 @@ struct BodyFrame
  * hem (where the crease runs) in front of the leg, or behind it, and its upper part blends into the hip cylinder so
  * the crotch curve reaches the center line. The side seam goes to the outside of the leg: it is the side the top of
  * the piece leans to, the crotch extension sticking out on the other side.
+ *
+ * Waistbands and collars are rings around the waist or the neck, lengthwise, their lower edge where the top of the
+ * garment (or its neckline) is. A band cut once goes all the way round, its ends at the center front; a band cut
+ * twice or on the fold is half a ring from the center back to the center front, its mirrored copy the other half.
  */
 class PieceArrangement
 {

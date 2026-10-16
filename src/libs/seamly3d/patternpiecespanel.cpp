@@ -527,6 +527,7 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             panel.name = piece.name;
             panel.color = pieceColors[i % (sizeof(pieceColors) / sizeof(pieceColors[0]))];
             panel.sewable = s.placement != PiecePlacement::Aside;
+            panel.band = s.placement == PiecePlacement::Waistband || s.placement == PiecePlacement::Collar;
             panel.rest = flat.mesh;
             panel.shape = placed.at(copy);
             panel.outlineCount = flat.outlineCount;

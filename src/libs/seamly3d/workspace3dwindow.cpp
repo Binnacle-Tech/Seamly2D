@@ -176,7 +176,7 @@ BodyFrame Workspace3DWindow::bodyFrame() const
         frame = bodyKind() == BodyKind::Realistic && m_fit.valid ? frame.withArm(m_fit.leftShoulder, m_fit.leftWrist)
                                                                   : frame.withArm(m_body.leftShoulder, m_body.leftWrist);
         // Trouser legs follow the legs of the body shown.
-        frame = frame.withLegs(m_viewport->mesh());
+        frame = frame.withLegs(m_viewport->mesh()).withNeckAndWaist(m_viewport->mesh());
     }
     return frame;
 }

@@ -310,6 +310,175 @@ void setInSleeves(const QVector<GarmentPanel> &panels, const QVector<EdgeInfo> &
     }
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Sews each waistband and collar on: its lower edge along the edges left open around it (waistlines,
+ * necklines), in order around the body, each taking a share of the band as long as itself.
+ */
+void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used, QVector<Seam> &seams)
+{
+    for (int b = 0; b < panels.size(); ++b)
+    {
+        const GarmentPanel &band = panels.at(b);
+        if (!band.sewable || !band.band || band.edgeCount() < 2)
+        {
+            continue;
+        }
+
+        // The lower of the band's long edges.
+        double longest = 0;
+        for (int e = 0; e < band.edgeCount(); ++e)
+        {
+            longest = qMax(longest, band.edgeLength(e));
+        }
+        int lower = -1;
+        float lowest = std::numeric_limits<float>::max();
+        for (int e = 0; e < band.edgeCount(); ++e)
+        {
+            if (band.edgeLength(e) < longest * 0.5 || used.contains(qMakePair(b, e)))
+            {
+                continue;
+            }
+            float height = 0;
+            const QVector<int> vertices = band.edgeVertices(e);
+            for (const int v : vertices)
+            {
+                height += band.shape.positions.at(v).y();
+            }
+            height /= static_cast<float>(vertices.size());
+            if (height < lowest)
+            {
+                lowest = height;
+                lower = e;
+            }
+        }
+        if (lower < 0)
+        {
+            continue;
+        }
+        const QVector<int> line = band.edgeVertices(lower);
+        QVector<double> along(line.size(), 0.0);
+        for (int i = 1; i < line.size(); ++i)
+        {
+            along[i] = along.at(i - 1) + static_cast<double>((band.rest.positions.at(line.at(i))
+                                                              - band.rest.positions.at(line.at(i - 1)))
+                                                                 .length());
+        }
+        // Where a point is along the band's lower edge (0 to 1), and how far from it.
+        const auto project = [&band, &line, &along](const QVector3D &point, float *distance)
+        {
+            int nearest = 0;
+            float best = std::numeric_limits<float>::max();
+            for (int i = 0; i < line.size(); ++i)
+            {
+                const float d = (band.shape.positions.at(line.at(i)) - point).length();
+                if (d < best)
+                {
+                    best = d;
+                    nearest = i;
+                }
+            }
+            if (distance != nullptr)
+            {
+                *distance = best;
+            }
+            return along.at(nearest) / qMax(1e-9, along.constLast());
+        };
+        // Half a band (one side of the body) takes only the edges on its side.
+        float side = 0;
+        for (const int v : line)
+        {
+            side += band.shape.positions.at(v).x();
+        }
+        side /= static_cast<float>(line.size());
+
+        struct Part
+        {
+            int    panel;
+            int    edge;
+            double from;   // along the band, where the edge's ends project
+            double to;
+            double length;
+        };
+        QVector<Part> parts;
+        for (int p = 0; p < panels.size(); ++p)
+        {
+            const GarmentPanel &panel = panels.at(p);
+            if (!panel.sewable || panel.band)
+            {
+                continue;
+            }
+            for (int e = 0; e < panel.edgeCount(); ++e)
+            {
+                if (used.contains(qMakePair(p, e)) || isHem(panel, e) || panel.edgeLength(e) < 2.0)
+                {
+                    continue;
+                }
+                const QVector<int> vertices = panel.edgeVertices(e);
+                bool near = true;
+                for (const int v : vertices)
+                {
+                    float distance = 0;
+                    project(panel.shape.positions.at(v), &distance);
+                    near = near && distance <= SeamFinder::bandReach;
+                }
+                const float middle = panel.shape.positions.at(vertices.at(vertices.size() / 2)).x();
+                if (!near || (qAbs(side) > 3.0f && middle * side < 0))
+                {
+                    continue;
+                }
+                // A whole band starts and ends at the same place (the center front): an end of the edge there could be
+                // either; it is the one on the side of the edge's middle.
+                const double middleAt = project(panel.shape.positions.at(vertices.at(vertices.size() / 2)), nullptr);
+                const auto endAt = [&project, &panel, middleAt](int vertex)
+                {
+                    const double at = project(panel.shape.positions.at(vertex), nullptr);
+                    return qAbs(at - middleAt) > 0.5 ? (at > middleAt ? 0.0 : 1.0) : at;
+                };
+                parts.append({p, e, endAt(vertices.constFirst()), endAt(vertices.constLast()), panel.edgeLength(e)});
+            }
+        }
+        if (parts.isEmpty())
+        {
+            continue;
+        }
+
+        // In order along the band, sharing it out from the first edge's start to the last one's end.
+        std::sort(parts.begin(), parts.end(), [](const Part &x, const Part &y)
+                  { return qMin(x.from, x.to) + qMax(x.from, x.to) < qMin(y.from, y.to) + qMax(y.from, y.to); });
+        double start = 1;
+        double end = 0;
+        double total = 0;
+        for (const Part &part : qAsConst(parts))
+        {
+            start = qMin(start, qMin(part.from, part.to));
+            end = qMax(end, qMax(part.from, part.to));
+            total += part.length;
+        }
+        if (end - start < 0.05)
+        {
+            start = 0;
+            end = 1;
+        }
+        double at = start;
+        for (const Part &part : qAsConst(parts))
+        {
+            Seam seam;
+            seam.panelA = b;
+            seam.edgeA = lower;
+            seam.startA = at;
+            at += (end - start) * part.length / total;
+            seam.endA = at;
+            seam.panelB = part.panel;
+            seam.edgeB = part.edge;
+            seam.reversed = part.from > part.to; // its end comes first along the band
+            seams.append(seam);
+            used.insert(qMakePair(part.panel, part.edge));
+        }
+        used.insert(qMakePair(b, lower));
+    }
+}
+
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -319,7 +488,7 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
     for (int p = 0; p < panels.size(); ++p)
     {
         const GarmentPanel &panel = panels.at(p);
-        if (!panel.sewable || panel.edgeCount() < 2)
+        if (!panel.sewable || panel.band || panel.edgeCount() < 2)
         {
             continue;
         }
@@ -467,6 +636,7 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
     }
 
     setInSleeves(panels, edges, used, seams);
+    sewOnBands(panels, used, seams);
     return seams;
 }
 
