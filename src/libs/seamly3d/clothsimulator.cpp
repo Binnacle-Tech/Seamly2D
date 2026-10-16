@@ -752,12 +752,14 @@ void ClothSimulator::collide(int begin, int end, float h)
         QVector3D &p = position[i];
 
         // However hard the constraints pull (a seam pulled through the body while the body pushes back), no particle
-        // moves farther in one step than the body collider reaches: the body always catches it.
+        // moves farther in one step than the body collider reaches: the body always catches it. Nor faster than a
+        // speed limit, whatever the step: sewn too fast, a sleeve whips round the arm and tangles.
         const QVector3D step = p - previous[i];
         const float distance = step.length();
-        if (distance > maxStep)
+        const float limit = qMin(maxStep, speedLimit * h);
+        if (distance > limit)
         {
-            p = previous[i] + step * (maxStep / distance);
+            p = previous[i] + step * (limit / distance);
         }
 
         QVector3D surface;

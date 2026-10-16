@@ -2458,6 +2458,19 @@ void TST_Seamly3D::clothSewsShirtOnBody()
     }
     const auto shoulders = static_cast<float>(measurements.value(BodyMeasurement::ShoulderTipHeight));
     QVERIFY2(top > shoulders, qPrintable(QStringLiteral("%1 below the shoulders at %2").arg(top).arg(shoulders)));
+
+    // Sewn closed round the arm, the sleeves do not tangle: sewn too fast, their ends crumpled, some of the fabric
+    // stretched to more than twice its length.
+    const QVector<QVector<float>> strain = simulator.strainMap();
+    const QVector<GarmentPanel> sewn = simulator.panels();
+    for (int p = 0; p < sewn.size(); ++p)
+    {
+        if (sewn.at(p).pieceId == 3)
+        {
+            const float most = *std::max_element(strain.at(p).cbegin(), strain.at(p).cend());
+            QVERIFY2(most < 0.6f, qPrintable(QStringLiteral("sleeve stretched %1").arg(most)));
+        }
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------

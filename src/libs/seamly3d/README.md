@@ -213,8 +213,10 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   processor cores, and so is the collision with the body. Woven
   fabrics keep the lengths of the flat piece; knits stretch. Seams pull their
   two edges together at 30 cm/s with gravity off, then gravity drapes the
-  garment. The body pushes the cloth out
-  to 4 mm from its surface, with friction; the floor stops whatever falls.
+  garment. No particle moves faster than 225 cm/s: faster, a sleeve sewn
+  round the arm whipped round it and tangled at the hem. The body pushes
+  the cloth out to 4 mm from its surface, with friction; the floor stops
+  whatever falls.
   Each particle weighs as much as the fabric around it.
 * It runs a few frames at a time between repaints, so the window stays
   responsive, and stops by itself once the garment has settled.

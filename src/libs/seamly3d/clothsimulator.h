@@ -172,7 +172,8 @@ public:
     QVector<QVector<float>> easeMap(float limit = 6.0f) const;
     bool  isSewn() const;       ///< all seams have been pulled closed
 
-    static constexpr float maxStep = 0.5f; ///< centimeters a particle may move in one solver step
+    static constexpr float maxStep = 0.5f;      ///< centimeters a particle may move in one solver step, at most
+    static constexpr float speedLimit = 225.0f; ///< cm/s a particle may move at, at most
 
 private:
     struct Distance
