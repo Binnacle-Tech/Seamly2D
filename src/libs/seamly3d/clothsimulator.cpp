@@ -312,6 +312,9 @@ void ClothSimulator::setBody(const Mesh &body)
 {
     // Reach: the thickness plus the farthest a particle may travel in one step (see maxStep).
     m_body.build(body, m_settings.thickness + maxStep);
+    m_bodyMesh = body;
+    m_easeBody.clear();
+    m_easeLimit = 0;
     m_floor = body.isEmpty() ? std::numeric_limits<float>::lowest() : body.bounds().minimum.y();
 }
 
@@ -370,7 +373,8 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
         }
         for (const float particleArea : area)
         {
-            m_inverseMass.append(particleArea > 1e-6f ? 1.0f / particleArea : 0.0f);
+            const float mass = particleArea * qMax(0.01f, m_settings.weight);
+            m_inverseMass.append(mass > 1e-6f ? 1.0f / mass : 0.0f);
         }
 
         // Stretch: every edge keeps its length on the flat piece. Bend: across every inner edge, the two opposite
@@ -581,9 +585,13 @@ void ClothSimulator::substep(float h, float gravity, float sewn)
         m_position[i] += m_velocity.at(i) * h;
     }
 
-    solveDistances(m_stretch, m_settings.stretchCompliance, h);
+    // Stretch and seams together, a few times: once lets a hanging garment stretch several percent.
+    for (int iteration = 0; iteration < qMax(1, m_settings.iterations); ++iteration)
+    {
+        solveDistances(m_stretch, m_settings.stretchCompliance, h);
+        solveSeams(sewn);
+    }
     solveDistances(m_bend, m_settings.bendCompliance, h);
-    solveSeams(sewn);
 
     // However hard the constraints pull (a seam pulled through the body while the body pushes back), no particle
     // moves farther in one step than the body collider reaches: the body always catches it.
@@ -747,6 +755,102 @@ float ClothSimulator::maxPenetration() const
         }
     }
     return depth;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<QVector<float>> ClothSimulator::strainMap() const
+{
+    QVector<float> sum(m_position.size(), 0.0f);
+    QVector<float> rest(m_position.size(), 0.0f);
+    for (const Distance &edge : m_stretch)
+    {
+        if (edge.rest <= 1e-6f)
+        {
+            continue;
+        }
+        // Weighed by length: how much longer the fabric around the particle is, as a whole. (Tiny edges would
+        // otherwise show large shares of tiny lengths.)
+        const float extra = (m_position.at(edge.a) - m_position.at(edge.b)).length() - edge.rest;
+        sum[edge.a] += extra;
+        sum[edge.b] += extra;
+        rest[edge.a] += edge.rest;
+        rest[edge.b] += edge.rest;
+    }
+    QVector<QVector<float>> result;
+    for (int p = 0; p < m_panels.size(); ++p)
+    {
+        QVector<float> values(m_panels.at(p).shape.positions.size(), 0.0f);
+        for (int v = 0; v < values.size(); ++v)
+        {
+            const int i = m_offset.at(p) + v;
+            values[v] = rest.at(i) > 0 ? sum.at(i) / rest.at(i) : 0.0f;
+        }
+        result.append(values);
+    }
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<QVector<float>> ClothSimulator::easeMap(float limit) const
+{
+    // A collider of its own, reaching as far as the map shows, in coarser cells.
+    if (m_easeLimit < limit && !m_bodyMesh.isEmpty())
+    {
+        m_easeBody.build(m_bodyMesh, limit + m_settings.thickness, 4.0f);
+        m_easeLimit = limit;
+    }
+    QVector<QVector<float>> result;
+    for (int p = 0; p < m_panels.size(); ++p)
+    {
+        QVector<float> values(m_panels.at(p).shape.positions.size(), limit);
+        for (int v = 0; v < values.size(); ++v)
+        {
+            const float distance = m_easeBody.closest(m_position.at(m_offset.at(p) + v)) - m_settings.thickness;
+            values[v] = qBound(0.0f, distance, limit);
+        }
+        result.append(values);
+    }
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+ClothSettings FabricPreset::apply(ClothSettings settings) const
+{
+    settings.stretchCompliance = stretchCompliance;
+    settings.bendCompliance = bendCompliance;
+    settings.friction = friction;
+    settings.thickness = thickness;
+    settings.damping = damping;
+    settings.weight = static_cast<float>(gramsPerSquareMeter) / 120.0f;
+    return settings;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<FabricPreset> FabricPreset::presets()
+{
+    const auto tr = [](const char *text) { return QCoreApplication::translate("Seamly3D::FabricPreset", text); };
+    //        id,                 name,                    g/m², stretch, bend,   friction, thickness, damping
+    return {{QStringLiteral("cotton"), tr("Cotton shirting"), 120, 0.0f, 4e-4f, 0.30f, 0.40f, 2.0f},
+            {QStringLiteral("linen"), tr("Linen"), 180, 0.0f, 2e-4f, 0.35f, 0.40f, 2.0f},
+            {QStringLiteral("denim"), tr("Denim"), 380, 0.0f, 2e-5f, 0.40f, 0.45f, 2.5f},
+            {QStringLiteral("jersey"), tr("Cotton jersey (knit)"), 180, 4e-6f, 6e-4f, 0.35f, 0.40f, 2.0f},
+            {QStringLiteral("silk"), tr("Silk"), 60, 0.0f, 2e-3f, 0.15f, 0.30f, 1.5f},
+            {QStringLiteral("fleece"), tr("Fleece"), 280, 1e-6f, 1e-4f, 0.45f, 0.60f, 3.0f},
+            {QStringLiteral("leather"), tr("Leather"), 800, 0.0f, 5e-6f, 0.50f, 0.50f, 3.0f}};
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+FabricPreset FabricPreset::preset(const QString &id)
+{
+    const QVector<FabricPreset> all = presets();
+    for (const FabricPreset &fabric : all)
+    {
+        if (fabric.id == id)
+        {
+            return fabric;
+        }
+    }
+    return all.constFirst();
 }
 
 } // namespace Seamly3D

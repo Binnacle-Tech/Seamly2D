@@ -27,6 +27,9 @@
 #include "patternpiecespanel.h"
 
 #include <QCheckBox>
+#include <QPixmap>
+#include <QGridLayout>
+#include <QFormLayout>
 #include <QComboBox>
 #include <QHBoxLayout>
 #include <QHeaderView>
@@ -37,6 +40,7 @@
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
+#include "clothsimulator.h"
 #include "patternprovider.h"
 
 #include <algorithm>
@@ -73,6 +77,12 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     , m_simulateButton(new QPushButton(tr("Sew && Drape"), this))
     , m_resetButton(new QPushButton(tr("Reset"), this))
     , m_simulationStatus(new QLabel(this))
+    , m_fabricCombo(new QComboBox(this))
+    , m_fitMapCombo(new QComboBox(this))
+    , m_legend(new QWidget(this))
+    , m_legendBar(new QLabel(m_legend))
+    , m_legendLow(new QLabel(m_legend))
+    , m_legendHigh(new QLabel(m_legend))
     , m_followTimer(new QTimer(this))
 {
     auto *layout = new QVBoxLayout(this);
@@ -132,6 +142,46 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     layout->addLayout(simulation);
     m_simulationStatus->setWordWrap(true);
     layout->addWidget(m_simulationStatus);
+
+    // Fabric and fit map.
+    for (const FabricPreset &fabric : FabricPreset::presets())
+    {
+        m_fabricCombo->addItem(fabric.name, fabric.id);
+        m_fabricCombo->setItemData(m_fabricCombo->count() - 1,
+                                   tr("%1 g/m%2").arg(fabric.gramsPerSquareMeter).arg(QChar(0x00B2)), Qt::ToolTipRole);
+    }
+    m_fabricCombo->setToolTip(tr("What the garment is made of: how it stretches, drapes and weighs"));
+    connect(m_fabricCombo, &QComboBox::currentIndexChanged, this, &PatternPiecesPanel::fabricChanged);
+    for (const FitMap::Kind kind : {FitMap::Kind::None, FitMap::Kind::Stretch, FitMap::Kind::Ease})
+    {
+        m_fitMapCombo->addItem(FitMap::name(kind), static_cast<int>(kind));
+    }
+    m_fitMapCombo->setToolTip(tr("Color the draped garment by how it fits"));
+    connect(m_fitMapCombo, &QComboBox::currentIndexChanged, this,
+            [this]()
+            {
+                const FitMap::Kind kind = fitMap();
+                m_legend->setVisible(kind != FitMap::Kind::None);
+                if (kind != FitMap::Kind::None)
+                {
+                    m_legendBar->setPixmap(QPixmap::fromImage(FitMap::legend(kind, 160, 10)));
+                    m_legendLow->setText(FitMap::lowLabel(kind));
+                    m_legendHigh->setText(FitMap::highLabel(kind));
+                }
+                emit fitMapChanged();
+            });
+    auto *legendLayout = new QGridLayout(m_legend);
+    legendLayout->setContentsMargins(0, 0, 0, 0);
+    legendLayout->addWidget(m_legendBar, 0, 0, 1, 2);
+    legendLayout->addWidget(m_legendLow, 1, 0, Qt::AlignLeft);
+    legendLayout->addWidget(m_legendHigh, 1, 1, Qt::AlignRight);
+    m_legend->setVisible(false);
+
+    auto *fabricForm = new QFormLayout;
+    fabricForm->addRow(tr("Fabric:"), m_fabricCombo);
+    fabricForm->addRow(tr("Fit map:"), m_fitMapCombo);
+    fabricForm->addRow(QString(), m_legend);
+    layout->addLayout(fabricForm);
 
     // Pattern edits come in bursts (every point of a drag): reload once they settle.
     m_followTimer->setSingleShot(true);
@@ -323,6 +373,38 @@ void PatternPiecesPanel::setSimulationStatus(const QString &text)
 void PatternPiecesPanel::setSimulationDetails(const QString &details)
 {
     m_simulationStatus->setToolTip(details);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString PatternPiecesPanel::fabric() const
+{
+    return m_fabricCombo->currentData().toString();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::setFabric(const QString &id)
+{
+    const int index = m_fabricCombo->findData(id);
+    if (index >= 0)
+    {
+        m_fabricCombo->setCurrentIndex(index);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+FitMap::Kind PatternPiecesPanel::fitMap() const
+{
+    return static_cast<FitMap::Kind>(m_fitMapCombo->currentData().toInt());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::setFitMap(FitMap::Kind kind)
+{
+    const int index = m_fitMapCombo->findData(static_cast<int>(kind));
+    if (index >= 0)
+    {
+        m_fitMapCombo->setCurrentIndex(index);
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------

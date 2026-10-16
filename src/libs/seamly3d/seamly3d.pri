@@ -13,6 +13,7 @@ SOURCES += \
     $$PWD/piecearrangement.cpp \
     $$PWD/garment.cpp \
     $$PWD/clothsimulator.cpp \
+    $$PWD/fitmap.cpp \
     $$PWD/patternsource.cpp \
     $$PWD/patternpiecespanel.cpp \
     $$PWD/objmeshreader.cpp \
@@ -44,6 +45,7 @@ HEADERS += \
     $$PWD/piecearrangement.h \
     $$PWD/garment.h \
     $$PWD/clothsimulator.h \
+    $$PWD/fitmap.h \
     $$PWD/patternsource.h \
     $$PWD/patternprovider.h \
     $$PWD/patternpiecespanel.h \

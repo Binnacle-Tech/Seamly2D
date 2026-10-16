@@ -49,7 +49,8 @@ context on Windows, macOS and Linux.
 | `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
 | `PieceMesher`, `PieceArrangement`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body, and the panel to arrange them. |
 | `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (between the piece's own points), and the seams found between those edges. |
-| `ClothSimulator`, `BodyCollider` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor. |
+| `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric. Gives the stretch and ease of the draped garment. |
+| `FitMap` | Colors for the fit maps and their legend. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
 | `Workspace3DIntegration` | The single hook into the 2D main window. |
 | `DxfReader`, `SvgReader`, `DxfPatternReader` (`dxfimport/`) | Reads ASCII DXF (blocks, polylines with arcs, splines, ellipses, text) and SVG (paths, shapes, transforms, `<use>`, text, real-world units), and finds the pattern pieces: AAMA/ASTM layers, or closed outlines. |
@@ -170,14 +171,25 @@ The status line says how sewing goes; its tooltip lists the seams found.
   a piece cut on the fold and its mirrored copy, the underarm seam of a
   sleeve, darts. A sleeve cap is set into the front and back armholes beside
   it, with up to 15% ease. Necklines and hems stay open.
-* **Simulation:** position based dynamics (XPBD) in small steps, 15 per frame.
-  The fabric keeps the lengths of the flat piece (it does not stretch) and
-  resists folding softly; seams pull their two edges together at 30 cm/s with
-  gravity off, then gravity drapes the garment. The body pushes the cloth out
+* **Simulation:** position based dynamics (XPBD) in small steps, 10 per frame,
+  each passing four times over the stretch and seam constraints. Woven
+  fabrics keep the lengths of the flat piece; knits stretch. Seams pull their
+  two edges together at 30 cm/s with gravity off, then gravity drapes the
+  garment. The body pushes the cloth out
   to 4 mm from its surface, with friction; the floor stops whatever falls.
   Each particle weighs as much as the fabric around it.
 * It runs a few frames at a time between repaints, so the window stays
   responsive, and stops by itself once the garment has settled.
+* **Fabric:** cotton shirting, linen, denim, cotton jersey, silk, fleece or
+  leather. Each has its own stretch, stiffness, weight per square meter,
+  friction and thickness. Changing it sews and drapes the garment again.
+* **Fit map:** colors the draped garment.
+  * **Stretch** shows how much longer the fabric is than the flat piece:
+    blue where it is pushed together, green where it is relaxed, yellow to
+    red where it is pulled tight (8% and more).
+  * **Ease** shows how far the cloth is from the body: red where it presses
+    on the body, through yellow, to green and blue where it hangs 6 cm or
+    more away.
 
 Not there yet: collars and waistbands sewn to necklines (pieces hung beside
 the body are not sewn), self collision (cloth folding through itself), fabric
@@ -296,10 +308,12 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
    - [x] Collision with the avatar (closest point on a triangle grid) and the
      floor, with friction
    - [ ] Self collision; a smoothed collision body for the finest details
-   - [ ] Fabric presets (cotton, denim, jersey, silk...) mapped to stiffness,
-     weight and friction; multithreaded solver
+   - [x] Fabric presets (cotton, linen, denim, jersey, silk, fleece, leather)
+     mapped to stretch, stiffness, weight, friction and thickness
+   - [ ] Per piece fabrics, custom fabrics; multithreaded solver
 5. **Fit analysis**
-   - [ ] Strain and stress maps, pressure maps, ease measured with `MeshSlicer`
+   - [x] Stretch map and ease (distance from the body) map, with a legend
+   - [ ] Pressure map, girths of the garment measured with `MeshSlicer`
 6. **2D ↔ 3D sync**
    - [ ] Edits in the 2D pattern update the 3D garment
    - [ ] Pins, folding and tacking in 3D

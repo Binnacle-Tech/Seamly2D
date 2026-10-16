@@ -41,24 +41,30 @@ namespace
 const char *const meshVertexShader =
     "attribute highp vec3 position;\n"
     "attribute highp vec3 normal;\n"
+    "attribute lowp vec3 vertexColor;\n"
     "uniform highp mat4 mvp;\n"
     "uniform highp mat3 normalMatrix;\n"
+    "uniform lowp vec4 color;\n"
+    "uniform lowp float useVertexColor;\n"
     "varying highp vec3 viewNormal;\n"
+    "varying lowp vec3 baseColor;\n"
     "void main()\n"
     "{\n"
     "    viewNormal = normalMatrix * normal;\n"
+    "    baseColor = mix(color.rgb, vertexColor, useVertexColor);\n"
     "    gl_Position = mvp * vec4(position, 1.0);\n"
     "}\n";
 
 const char *const meshFragmentShader =
     "uniform lowp vec4 color;\n"
     "varying highp vec3 viewNormal;\n"
+    "varying lowp vec3 baseColor;\n"
     "void main()\n"
     "{\n"
     "    // Headlight from slightly above the camera; abs() lights back faces of open meshes too.\n"
     "    highp vec3 lightDirection = normalize(vec3(0.3, 0.6, 1.0));\n"
     "    highp float diffuse = abs(dot(normalize(viewNormal), lightDirection));\n"
-    "    gl_FragColor = vec4(color.rgb * (0.3 + 0.7 * diffuse), color.a);\n"
+    "    gl_FragColor = vec4(baseColor * (0.3 + 0.7 * diffuse), color.a);\n"
     "}\n";
 
 const char *const lineVertexShader =
@@ -237,6 +243,7 @@ void Viewport3D::initializeGL()
     m_meshProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, meshFragmentShader);
     m_meshProgram->bindAttributeLocation("position", 0);
     m_meshProgram->bindAttributeLocation("normal", 1);
+    m_meshProgram->bindAttributeLocation("vertexColor", 2);
     if (!m_meshProgram->link())
     {
         qWarning("Seamly3D: mesh shader failed to link: %s", qPrintable(m_meshProgram->log()));
@@ -306,18 +313,19 @@ void Viewport3D::paintGL()
 
     if (m_meshProgram->isLinked())
     {
-        drawMesh(mvp, view, m_meshVertices, m_meshIndices, m_meshIndexCount, m_meshColor);
+        drawMesh(mvp, view, m_meshVertices, m_meshIndices, m_meshIndexCount, m_meshColor, nullptr);
         for (int i = 0; i < m_overlayBuffers.size() && i < m_overlays.size(); ++i)
         {
             GpuMesh &gpu = m_overlayBuffers[i];
-            drawMesh(mvp, view, gpu.vertices, gpu.indices, gpu.indexCount, m_overlays.at(i).color);
+            drawMesh(mvp, view, gpu.vertices, gpu.indices, gpu.indexCount, m_overlays.at(i).color,
+                     gpu.hasColors ? &gpu.colors : nullptr);
         }
     }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
 void Viewport3D::drawMesh(const QMatrix4x4 &mvp, const QMatrix4x4 &view, QOpenGLBuffer &vertices,
-                          QOpenGLBuffer &indices, int indexCount, const QColor &color)
+                          QOpenGLBuffer &indices, int indexCount, const QColor &color, QOpenGLBuffer *colors)
 {
     if (indexCount <= 0)
     {
@@ -328,6 +336,19 @@ void Viewport3D::drawMesh(const QMatrix4x4 &mvp, const QMatrix4x4 &view, QOpenGL
     m_meshProgram->setUniformValue("mvp", mvp);
     m_meshProgram->setUniformValue("normalMatrix", view.normalMatrix());
     m_meshProgram->setUniformValue("color", color);
+    m_meshProgram->setUniformValue("useVertexColor", colors != nullptr ? 1.0f : 0.0f);
+    if (colors != nullptr)
+    {
+        colors->bind();
+        m_meshProgram->enableAttributeArray(2);
+        m_meshProgram->setAttributeBuffer(2, GL_FLOAT, 0, 3, 3 * sizeof(float));
+        colors->release();
+    }
+    else
+    {
+        m_meshProgram->disableAttributeArray(2);
+        m_meshProgram->setAttributeValue(2, 0.0f, 0.0f, 0.0f);
+    }
     vertices.bind();
     indices.bind();
     m_meshProgram->enableAttributeArray(0);
@@ -335,6 +356,7 @@ void Viewport3D::drawMesh(const QMatrix4x4 &mvp, const QMatrix4x4 &view, QOpenGL
     m_meshProgram->setAttributeBuffer(0, GL_FLOAT, 0, 3, 6 * sizeof(float));
     m_meshProgram->setAttributeBuffer(1, GL_FLOAT, 3 * sizeof(float), 3, 6 * sizeof(float));
     glDrawElements(GL_TRIANGLES, indexCount, GL_UNSIGNED_INT, nullptr);
+    m_meshProgram->disableAttributeArray(2);
     m_meshProgram->disableAttributeArray(1);
     m_meshProgram->disableAttributeArray(0);
     indices.release();
@@ -363,6 +385,24 @@ void Viewport3D::uploadOverlays()
         gpu.indices.allocate(mesh.indices.constData(), static_cast<int>(mesh.indices.size() * sizeof(quint32)));
         gpu.indices.release();
         gpu.indexCount = static_cast<int>(mesh.indices.size());
+
+        // Colors per vertex (fit maps), when there is one for every vertex.
+        const QVector<QColor> &colors = m_overlays.at(i).vertexColors;
+        gpu.hasColors = !colors.isEmpty() && colors.size() == mesh.positions.size();
+        if (gpu.hasColors)
+        {
+            QVector<float> colorData;
+            colorData.reserve(colors.size() * 3);
+            for (const QColor &c : colors)
+            {
+                colorData << static_cast<float>(c.redF()) << static_cast<float>(c.greenF())
+                          << static_cast<float>(c.blueF());
+            }
+            gpu.colors.create();
+            gpu.colors.bind();
+            gpu.colors.allocate(colorData.constData(), static_cast<int>(colorData.size() * sizeof(float)));
+            gpu.colors.release();
+        }
     }
 }
 
@@ -373,6 +413,7 @@ void Viewport3D::destroyOverlayBuffers()
     {
         gpu.vertices.destroy();
         gpu.indices.destroy();
+        gpu.colors.destroy();
     }
     m_overlayBuffers.clear();
 }

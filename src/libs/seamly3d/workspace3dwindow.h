@@ -89,6 +89,8 @@ private slots:
     void        setSimulationRunning(bool run);
     void        resetSimulation();
     void        stepSimulation();
+    void        fabricChanged();
+    void        showGarment();
 
 private:
     Q_DISABLE_COPY_MOVE(Workspace3DWindow)

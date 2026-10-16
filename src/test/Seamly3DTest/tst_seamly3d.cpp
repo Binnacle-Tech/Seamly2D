@@ -37,10 +37,12 @@
 #include <QtTest>
 
 #include <limits>
+#include <memory>
 
 #include "bodymeasurements.h"
 #include "bodymeasurementspanel.h"
 #include "clothsimulator.h"
+#include "fitmap.h"
 #include "dxfimport/dxfimportwizard.h"
 #include "dxfimport/dxfpattern.h"
 #include "dxfimport/dxfpatternconverter.h"
@@ -249,6 +251,9 @@ private slots:
     void svgUnitsAndTransforms();
     void svgPatternPieces();
     void dxfPlainMarks();
+    void fabricPresets();
+    void fitMapsOnSphere();
+    void fitMapColors();
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2691,6 +2696,121 @@ void TST_Seamly3D::dxfPlainMarks()
     QVERIFY(piece.hasMirrorLine);
     QVERIFY(qAbs(piece.mirrorLine.length() - 400) < 1e-6);
     QVERIFY2(piece.internalLines.isEmpty(), qPrintable(QString::number(piece.internalLines.size())));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::fabricPresets()
+{
+    const QVector<FabricPreset> fabrics = FabricPreset::presets();
+    QVERIFY(fabrics.size() >= 5);
+    QCOMPARE(fabrics.constFirst().id, QStringLiteral("cotton"));
+    QSet<QString> ids;
+    for (const FabricPreset &fabric : fabrics)
+    {
+        QVERIFY(!ids.contains(fabric.id));
+        ids.insert(fabric.id);
+        QVERIFY(!fabric.name.isEmpty());
+    }
+    // Weight relative to shirting; knits stretch, wovens do not; denim is stiffer than silk.
+    QCOMPARE(FabricPreset::preset(QStringLiteral("cotton")).apply(ClothSettings()).weight, 1.0f);
+    QVERIFY(FabricPreset::preset(QStringLiteral("denim")).apply(ClothSettings()).weight > 3.0f);
+    QVERIFY(FabricPreset::preset(QStringLiteral("jersey")).stretchCompliance > 0);
+    QCOMPARE(FabricPreset::preset(QStringLiteral("denim")).stretchCompliance, 0.0f);
+    QVERIFY(FabricPreset::preset(QStringLiteral("denim")).bendCompliance
+            < FabricPreset::preset(QStringLiteral("silk")).bendCompliance);
+    QCOMPARE(FabricPreset::preset(QStringLiteral("no such fabric")).id, QStringLiteral("cotton"));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::fitMapsOnSphere()
+{
+    // A cloth dropped on a ball: it lies on the ball at the top (no ease) and hangs off it at the corners.
+    GarmentPanel cloth = rectanglePanel(60, 60);
+    for (QVector3D &p : cloth.shape.positions)
+    {
+        p = QVector3D(p.x() - 30, 125, p.y() - 30);
+    }
+    const auto drape = [&cloth](const QString &fabric)
+    {
+        auto simulator = std::make_unique<ClothSimulator>();
+        simulator->setSettings(FabricPreset::preset(fabric).apply(ClothSettings()));
+        simulator->setBody(sphereMesh(QVector3D(0, 100, 0), 20));
+        simulator->setGarment({cloth}, {});
+        for (int frame = 0; frame < 60; ++frame)
+        {
+            simulator->step();
+        }
+        return simulator;
+    };
+
+    const auto cotton = drape(QStringLiteral("cotton"));
+    const QVector<QVector<float>> strain = cotton->strainMap();
+    const QVector<QVector<float>> ease = cotton->easeMap();
+    QCOMPARE(strain.size(), 1);
+    QCOMPARE(strain.constFirst().size(), cloth.shape.positions.size());
+    QCOMPARE(ease.constFirst().size(), cloth.shape.positions.size());
+
+    double average = 0;
+    for (const float value : strain.constFirst())
+    {
+        average += static_cast<double>(value);
+    }
+    average /= strain.constFirst().size();
+    QVERIFY2(qAbs(average) < 0.03, qPrintable(QString::number(average)));
+
+    const QVector<GarmentPanel> draped = cotton->panels();
+    int top = 0;
+    int corner = 0;
+    for (int v = 0; v < draped.constFirst().shape.positions.size(); ++v)
+    {
+        const QVector3D &p = draped.constFirst().shape.positions.at(v);
+        if (p.y() > draped.constFirst().shape.positions.at(top).y())
+        {
+            top = v;
+        }
+        if (p.y() < draped.constFirst().shape.positions.at(corner).y())
+        {
+            corner = v;
+        }
+    }
+    QVERIFY2(ease.constFirst().at(top) < 0.2f, qPrintable(QString::number(ease.constFirst().at(top))));
+    QVERIFY2(ease.constFirst().at(corner) > 2.0f, qPrintable(QString::number(ease.constFirst().at(corner))));
+
+    // A knit stretches more under its own weight than leather.
+    const auto averageStrain = [](const ClothSimulator &simulator)
+    {
+        double sum = 0;
+        int count = 0;
+        for (const QVector<float> &panel : simulator.strainMap())
+        {
+            for (const float value : panel)
+            {
+                sum += static_cast<double>(value);
+                ++count;
+            }
+        }
+        return sum / qMax(1, count);
+    };
+    QVERIFY(averageStrain(*drape(QStringLiteral("jersey"))) > averageStrain(*drape(QStringLiteral("leather"))));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::fitMapColors()
+{
+    // Stretch: blue pushed together, green relaxed, red pulled tight. Ease: red on the body, blue far from it.
+    QVERIFY(FitMap::color(FitMap::Kind::Stretch, -0.1f).blue() > 200);
+    QVERIFY(FitMap::color(FitMap::Kind::Stretch, 0.0f).green() > 150);
+    QVERIFY(FitMap::color(FitMap::Kind::Stretch, 0.2f).red() > 200);
+    QVERIFY(FitMap::color(FitMap::Kind::Ease, 0.0f).red() > 200);
+    QVERIFY(FitMap::color(FitMap::Kind::Ease, 10.0f).blue() > 200);
+    // In between: blended.
+    const QColor middle = FitMap::color(FitMap::Kind::Stretch, 0.015f);
+    QVERIFY(middle.red() > 60 && middle.red() < 240);
+    QCOMPARE(FitMap::colors(FitMap::Kind::Ease, {0.0f, 1.0f, 2.0f}).size(), 3);
+    const QImage legend = FitMap::legend(FitMap::Kind::Ease, 100, 8);
+    QCOMPARE(legend.size(), QSize(100, 8));
+    QVERIFY(QColor(legend.pixel(0, 4)).red() > 200);
+    QVERIFY(QColor(legend.pixel(99, 4)).blue() > 200);
 }
 
 QTEST_MAIN(TST_Seamly3D)

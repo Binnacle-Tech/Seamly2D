@@ -27,6 +27,7 @@
 #ifndef SEAMLY3D_CLOTHSIMULATOR_H
 #define SEAMLY3D_CLOTHSIMULATOR_H
 
+#include <QCoreApplication>
 #include <QVector>
 #include <QVector3D>
 
@@ -85,7 +86,8 @@ private:
 struct ClothSettings
 {
     float frameTime{1.0f / 30.0f};
-    int   substeps{15};             ///< Solver steps per frame; more is stiffer and slower
+    int   substeps{10};             ///< Solver steps per frame; more is stiffer and slower
+    int   iterations{4};            ///< Passes over the stretch and seam constraints in each step
     float gravity{981.0f};          ///< cm/s²
     float stretchCompliance{0.0f};  ///< 0: the fabric does not stretch
     float bendCompliance{4e-4f};    ///< larger is softer: chiffon drapes, denim does not
@@ -94,6 +96,30 @@ struct ClothSettings
     float friction{0.3f};           ///< 0 slides freely, 1 sticks where it touches
     float sewingSpeed{30.0f};       ///< cm/s the seams pull together at
     float sewingGravity{0.0f};      ///< Gravity, as a share of the full gravity, until the seams are closed
+    float weight{1.0f};             ///< Areal weight, relative to a 120 g/m² shirting
+};
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief A kind of fabric: how it stretches, bends, weighs and slides.
+ */
+struct FabricPreset
+{
+    QString id{};
+    QString name{};
+    int     gramsPerSquareMeter{120};
+    float   stretchCompliance{0};   ///< 0: does not stretch (wovens); knits stretch
+    float   bendCompliance{4e-4f};  ///< larger drapes softer
+    float   friction{0.3f};
+    float   thickness{0.4f};        ///< centimeters the cloth keeps from the body
+    float   damping{2.0f};
+
+    /** @brief apply returns @p settings with this fabric's properties. */
+    ClothSettings apply(ClothSettings settings) const;
+
+    /** @brief The fabrics to choose from, shirting cotton first. */
+    static QVector<FabricPreset> presets();
+    static FabricPreset preset(const QString &id);
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -130,6 +156,18 @@ public:
     float maxSpeed() const;     ///< cm/s of the fastest particle in the last frame
     float averageSpeed() const; ///< cm/s the particles moved at on average in the last frame
     float maxPenetration() const; ///< centimeters the deepest particle is inside the body (0 when none is)
+
+    /**
+     * @brief strainMap is, for each particle of each panel, how much the fabric around it is stretched: the edges
+     * meeting there, longer than on the flat piece by this share on average (0.02 is 2%; negative is compressed).
+     */
+    QVector<QVector<float>> strainMap() const;
+
+    /**
+     * @brief easeMap is, for each particle of each panel, how far the cloth is from the body, in centimeters: 0
+     * where it lies on the body, up to @p limit.
+     */
+    QVector<QVector<float>> easeMap(float limit = 6.0f) const;
     bool  isSewn() const;       ///< all seams have been pulled closed
 
     static constexpr float maxStep = 1.0f; ///< centimeters a particle may move in one solver step
@@ -161,6 +199,9 @@ private:
 
     ClothSettings         m_settings{};
     BodyCollider          m_body{};
+    Mesh                  m_bodyMesh{};
+    mutable BodyCollider  m_easeBody{};   ///< reaches further, for the ease map (built when first needed)
+    mutable float         m_easeLimit{0};
     QVector<GarmentPanel> m_panels{};
     QVector<int>          m_offset{};    ///< First particle of each panel
     QVector<QVector3D>    m_position{};

@@ -65,8 +65,9 @@ public:
     /** @brief A mesh drawn together with the body, in its own color (pattern pieces). */
     struct Overlay
     {
-        Mesh   mesh{};
-        QColor color{};
+        Mesh            mesh{};
+        QColor          color{};
+        QVector<QColor> vertexColors{}; ///< one per vertex to color it vertex by vertex (fit maps); else empty
     };
 
     void        setOverlays(const QVector<Overlay> &overlays);
@@ -105,14 +106,16 @@ private:
     {
         QOpenGLBuffer vertices{QOpenGLBuffer::VertexBuffer};
         QOpenGLBuffer indices{QOpenGLBuffer::IndexBuffer};
+        QOpenGLBuffer colors{QOpenGLBuffer::VertexBuffer};
         int           indexCount{0};
+        bool          hasColors{false};
     };
 
     void        uploadMesh();
     void        uploadOverlays();
     void        uploadGrid();
     void        drawMesh(const QMatrix4x4 &mvp, const QMatrix4x4 &view, QOpenGLBuffer &vertices,
-                         QOpenGLBuffer &indices, int indexCount, const QColor &color);
+                         QOpenGLBuffer &indices, int indexCount, const QColor &color, QOpenGLBuffer *colors);
     void        destroyOverlayBuffers();
     float       gridStep() const;
     Bounds3D    sceneBounds() const;

@@ -90,6 +90,15 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
             &Workspace3DWindow::usePatternMeasurements);
     connect(m_piecesPanel, &PatternPiecesPanel::simulationToggled, this, &Workspace3DWindow::setSimulationRunning);
     connect(m_piecesPanel, &PatternPiecesPanel::simulationResetRequested, this, &Workspace3DWindow::updatePieces);
+    connect(m_piecesPanel, &PatternPiecesPanel::fabricChanged, this, &Workspace3DWindow::fabricChanged);
+    connect(m_piecesPanel, &PatternPiecesPanel::fitMapChanged, this,
+            [this]()
+            {
+                if (!m_simulator.isEmpty())
+                {
+                    showGarment();
+                }
+            });
 
     // The simulation advances a few frames at a time between repaints, so the window stays responsive.
     m_simulationTimer->setInterval(15);
@@ -226,6 +235,7 @@ void Workspace3DWindow::setSimulationRunning(bool run)
                            + edgeName(seam.panelB, seam.edgeB));
         }
 
+        m_simulator.setSettings(FabricPreset::preset(m_piecesPanel->fabric()).apply(ClothSettings()));
         m_simulator.setBody(m_viewport->mesh());
         m_simulator.setGarment(panels, seams);
         m_settledFrames = 0;
@@ -233,6 +243,40 @@ void Workspace3DWindow::setSimulationRunning(bool run)
         m_piecesPanel->setSimulationDetails(details.join(QLatin1Char('\n')));
     }
     m_simulationTimer->start();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::showGarment()
+{
+    QVector<Viewport3D::Overlay> overlays = PatternPiecesPanel::overlays(m_simulator.panels());
+    const FitMap::Kind kind = m_piecesPanel->fitMap();
+    if (kind != FitMap::Kind::None)
+    {
+        const QVector<QVector<float>> values = kind == FitMap::Kind::Stretch ? m_simulator.strainMap()
+                                                                             : m_simulator.easeMap();
+        const QVector<GarmentPanel> panels = m_simulator.panels();
+        for (int p = 0; p < overlays.size() && p < values.size(); ++p)
+        {
+            if (panels.at(p).sewable) // pieces hung beside the body are not worn
+            {
+                overlays[p].vertexColors = FitMap::colors(kind, values.at(p));
+            }
+        }
+    }
+    m_viewport->setOverlays(overlays);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::fabricChanged()
+{
+    // Another fabric drapes differently: sew and drape again.
+    if (m_simulator.isEmpty())
+    {
+        return;
+    }
+    updatePieces();
+    m_piecesPanel->setSimulationRunning(true);
+    setSimulationRunning(true);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -251,7 +295,7 @@ void Workspace3DWindow::stepSimulation()
     {
         m_simulator.step();
     } while (slice.elapsed() < 25);
-    m_viewport->setOverlays(PatternPiecesPanel::overlays(m_simulator.panels()));
+    showGarment();
 
     const QString seams = tr("%n seam(s)", nullptr, m_simulator.seamCount());
     if (!m_simulator.isSewn())

@@ -33,12 +33,14 @@
 
 #include <memory>
 
+#include "fitmap.h"
 #include "garment.h"
 #include "piecearrangement.h"
 #include "piecemesher.h"
 #include "viewport3d.h"
 
 class QCheckBox;
+class QComboBox;
 class QLabel;
 class QPushButton;
 class QTimer;
@@ -90,11 +92,20 @@ public:
     void     setSimulationStatus(const QString &text);
     void     setSimulationDetails(const QString &details); ///< shown as the status' tooltip (the seams found)
 
+    /** @brief The fabric the garment is made of (FabricPreset id). */
+    QString      fabric() const;
+    void         setFabric(const QString &id);
+    /** @brief How the draped garment is colored. */
+    FitMap::Kind fitMap() const;
+    void         setFitMap(FitMap::Kind kind);
+
 signals:
     void arrangementChanged();
     void useMeasurementsRequested();
     void simulationToggled(bool run);
     void simulationResetRequested();
+    void fabricChanged();
+    void fitMapChanged();
 
 public slots:
     void reload();
@@ -125,6 +136,12 @@ private:
     QPushButton *m_simulateButton;
     QPushButton *m_resetButton;
     QLabel      *m_simulationStatus;
+    QComboBox   *m_fabricCombo;
+    QComboBox   *m_fitMapCombo;
+    QWidget     *m_legend;
+    QLabel      *m_legendBar;
+    QLabel      *m_legendLow;
+    QLabel      *m_legendHigh;
     QTimer      *m_followTimer;
     bool         m_updatingList{false};
 };
