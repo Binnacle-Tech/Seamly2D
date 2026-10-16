@@ -319,55 +319,135 @@ The realistic body is a port of MakeHuman (see `makehuman/README.md`).
 The goal is the loop those tools are known for: avatar → arrange 2D pieces
 around it → sew → simulate → check the fit → edit in 2D and see it in 3D.
 
-1. **Avatar** (started)
-   - [x] Body generated from measurements, with exact girths
-   - [x] Measurements from SeamlyMe `.vit`, cm or inch
-   - [x] OBJ import and export
-   - [x] Realistic body: MakeHuman base mesh and targets fitted to every
-     measurement in the panel, all ages from 1 to 90
-   - [ ] More measurements from the Seamly2D database (highbust, across
-     chest/back, waist lengths, crotch length...)
-   - [ ] More landmarks: across back and chest, front and back waist length,
-     bust point spacing, posture and asymmetry
-   - [ ] Units for imported models, and fitting an imported scan to measurements
-   - [ ] Poses through a skeleton, so garments can be checked in motion
-2. **Pattern pieces in 3D**
-   - [x] Triangulate piece outlines (`PolygonTriangulator`, `PieceMesher`)
-   - [x] Read-only adapter that gets the pieces and measurements of the open
-     pattern (`PatternSource`)
-   - [x] Arrangement around the avatar (front, back, sides, sleeves along the
-     arms, skirts from the waist, trouser legs around the legs, waistbands and
-     collars, pieces beside the body), pairs for pieces cut twice or on the
-     fold
-   - [ ] Drag pieces in 3D; use grainlines and notches for orientation
-   - [x] Import DXF patterns from other CAD systems (AAMA/ASTM) as
-     parametric Seamly2D patterns
-3. **Sewing**
-   - [x] Seams found automatically between piece edges: one to one (sides,
-     shoulders, folds, darts, underarms, inseams, crotch seams), sleeve caps
-     into armholes, waistbands and collars along waistlines and necklines
-   - [x] Seams list: switch seams off, add seams between two edges, seam
-     lines drawn in 3D
-   - [ ] Pick seam edges in 3D or on the 2D pieces, with notches as
-     alignment hints; cuffs, pockets, facings; collars that fold over
-4. **Cloth simulation**
-   - [x] Even triangle mesh of each piece (Delaunay flips, longest edge
-     bisection)
-   - [x] XPBD solver: stretch, bending, seam constraints, gravity, damping
-   - [x] Collision with the avatar (closest point on a triangle grid) and the
-     floor, with friction
-   - [ ] Self collision; a smoothed collision body for the finest details
-   - [x] Fabric presets (cotton, linen, denim, jersey, silk, fleece, leather)
-     mapped to stretch, stiffness, weight, friction and thickness
-   - [x] Solver on all processor cores (pieces side by side); 30 steps per
-     frame so waistbands hold
-   - [ ] Per piece fabrics, custom fabrics
-5. **Fit analysis**
-   - [x] Stretch map and ease (distance from the body) map, with a legend
-   - [ ] Pressure map, girths of the garment measured with `MeshSlicer`
-6. **2D ↔ 3D sync**
-   - [ ] Edits in the 2D pattern update the 3D garment
-   - [ ] Pins, folding and tacking in 3D
-7. **Presentation**
-   - [ ] Fabric textures and prints from UV coordinates of the 2D pieces,
-     better shading, turntable images and video, garment export (OBJ/glTF)
+### Next up
+
+In order, because each one unblocks real patterns rather than test ones:
+
+1. **Save the 3D setup** (placements, pairs, flips, seams switched off or
+   added, fabric) in a file next to the pattern, so it survives closing it.
+   Nothing in the workspace is saved yet. The `.val` schema must not change.
+2. **Arrange real patterns:** move and turn pieces in 3D, and guess where
+   unnamed pieces go from their shape (imported patterns like FreeSewing's
+   Devon have no names, so every piece is hung beside the body), so
+   many-piece garments do not overlap.
+3. **Sew real patterns:** pick seam edges in 3D or on the 2D pieces, sew
+   part of an edge between notches, and use notches to line seams up.
+4. **Fabric grain:** stretch that differs along the warp, the weft and the
+   bias, from the grainline, and a fabric per piece.
+5. **Self collision**, which layered garments, fold-over collars and
+   tucked-in shirts need.
+
+### 1. Avatar
+
+- [x] Body generated from measurements, with exact girths
+- [x] Measurements from SeamlyMe `.vit`, cm or inch
+- [x] OBJ import and export
+- [x] Realistic body: MakeHuman base mesh and targets fitted to every
+  measurement in the panel, all ages from 1 to 90
+- [ ] More measurements from the Seamly2D database (highbust, across
+  chest/back, waist lengths, crotch length...)
+- [ ] More landmarks: across back and chest, front and back waist length,
+  bust point spacing, posture and asymmetry
+- [ ] Units for imported models, and fitting an imported scan to measurements
+- [ ] Poses through a skeleton, so garments can be checked in motion
+- [ ] Save and load bodies (measurements plus build) apart from a pattern
+
+### 2. Pattern pieces in 3D
+
+- [x] Triangulate piece outlines (`PolygonTriangulator`, `PieceMesher`)
+- [x] Read-only adapter that gets the pieces and measurements of the open
+  pattern (`PatternSource`)
+- [x] Arrangement around the avatar (front, back, sides, sleeves along the
+  arms, skirts from the waist, trouser legs around the legs, waistbands and
+  collars, pieces beside the body), pairs for pieces cut twice or on the
+  fold
+- [x] Import DXF and SVG patterns from other CAD systems and pattern sites
+  as parametric Seamly2D patterns
+- [ ] Move, turn and bend pieces in 3D (arrangement points, as in CLO)
+- [ ] Use grainlines and notches for orientation: which way is up, which
+  edge is the center line or the side seam (now guessed from the shape,
+  with **Flip** to correct it)
+- [ ] Guess placements from shape for pieces without a name
+- [ ] Bands drawn upright in the pattern: tell their top from their bottom
+- [ ] Place cuffs (round the wrist), pockets, facings and yokes
+- [ ] Several garments at once, in layers (a shirt under trousers)
+
+### 3. Sewing
+
+- [x] Seams found automatically between piece edges: one to one (sides,
+  shoulders, folds, darts, underarms, inseams, crotch seams), sleeve caps
+  into armholes, waistbands and collars along waistlines and necklines
+- [x] Seams list: switch seams off, add seams between two edges, seam
+  lines drawn in 3D
+- [ ] Pick seam edges in 3D or on the 2D pieces
+- [ ] Sew part of an edge (between notches or points), and line seams up
+  by their notches
+- [ ] Gathers and ease: sew a longer edge into a shorter one on purpose
+- [ ] Cuffs, pockets and facings sewn on; collars that fold over
+- [ ] Openings and closures: button stands that overlap, flies, zips
+- [ ] Fold lines and internal lines as creases (pleats, pressed folds)
+
+### 4. Cloth simulation
+
+- [x] Even triangle mesh of each piece (Delaunay flips, longest edge
+  bisection)
+- [x] XPBD solver: stretch, bending, seam constraints, gravity, damping
+- [x] Collision with the avatar (closest point on a triangle grid) and the
+  floor, with friction
+- [x] Fabric presets (cotton, linen, denim, jersey, silk, fleece, leather)
+  mapped to stretch, stiffness, weight, friction and thickness
+- [x] Solver on all processor cores (pieces side by side); 30 steps per
+  frame so waistbands hold; a speed limit so sleeves do not tangle
+- [ ] Self collision, and collision between garments
+- [ ] Waistlines that hold without stretching (now 4% for a skirt, 8% for
+  trousers): a stiffer solver for long edges under load
+- [ ] Fabric grain: different stretch along the warp, the weft and the bias
+- [ ] A fabric per piece, custom fabrics, saved with the pattern
+- [ ] A smoothed collision body for the finest details
+- [ ] Faster: drape a garment in about a second (now 60 to 90 ms per frame
+  on four cores for 4,000 to 6,000 particles, so 3 s of draping takes 5 to
+  8 s); finer meshes where the cloth folds
+
+### 5. Fit analysis
+
+- [x] Stretch map and ease (distance from the body) map, with a legend
+- [ ] Pressure map
+- [ ] Girths of the garment measured with `MeshSlicer`, beside the body's,
+  as an ease table (bust, waist, hip, thigh...)
+- [ ] Warnings where the garment is too tight to put on or too short
+
+### 6. 2D ↔ 3D sync
+
+- [x] **Follow pattern changes**: the pieces update while the pattern is
+  edited in 2D
+- [ ] Keep the drape when the pattern changes, instead of starting over
+- [ ] Select a piece or an edge in 2D and see it in 3D, and back
+- [ ] Pins, folding and tacking in 3D
+- [ ] From 3D to 2D: flatten a surface drawn on the body into a piece
+
+### 7. Saving and workflow
+
+- [ ] Save the 3D setup next to the pattern (see **Next up**)
+- [ ] Undo and redo in the 3D workspace
+- [ ] Keep the window layout, the camera and the last fabric between
+  sessions
+
+### 8. Presentation
+
+- [ ] Fabric textures and prints from UV coordinates of the 2D pieces
+- [ ] Better shading: thickness at the edges, seams and topstitching
+- [ ] Turntable images and video
+- [ ] Garment export (OBJ, glTF), with or without the body
+
+### 9. Quality, platforms and documentation
+
+- [x] Unit tests for everything but the GL widgets (`Seamly3DTest`), run by
+  the Linux CI with `make check`
+- [ ] Check the Windows (MSVC) and macOS builds of `seamly3d` in CI, and run
+  the tests there
+- [ ] Translations: the workspace's texts are not in
+  `share/translations/translations.pro` yet; add them there (or in a file of
+  their own, so as not to change the main project's)
+- [ ] Test with real patterns: Seamly2D samples and imported FreeSewing
+  patterns, draped and checked by eye and by numbers
+- [ ] A user guide with pictures, in the Seamly2D documentation
