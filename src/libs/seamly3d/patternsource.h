@@ -69,6 +69,9 @@ public:
 
     /** @brief defaultUnit is the unit chosen in Seamly2D's preferences (asked on first start): "cm", "mm" or "inch". */
     static QString defaultUnit();
+
+    /** @brief patternFile is the file the pattern was opened from or last saved to; empty for a new pattern. */
+    static QString patternFile();
 };
 
 /**
@@ -87,6 +90,7 @@ public:
         return PatternSource::watch(context, changed);
     }
     QString defaultUnit() const override { return PatternSource::defaultUnit(); }
+    QString patternFile() const override { return PatternSource::patternFile(); }
 };
 
 } // namespace Seamly3D

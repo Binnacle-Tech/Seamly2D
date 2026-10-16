@@ -137,6 +137,10 @@ public:
 
     static QString displayName(PiecePlacement placement);
 
+    /** @brief placementId names a placement in files ("front", "left-leg-back"...): it never changes. */
+    static QString        placementId(PiecePlacement placement);
+    static PiecePlacement placementFromId(const QString &id, bool *known = nullptr);
+
     /**
      * @brief place returns the piece and, when @p pair is set, its mirrored copy, wrapped around the body.
      * @param flat the piece mesh in pattern coordinates (centimeters, Y down, Z = 0)

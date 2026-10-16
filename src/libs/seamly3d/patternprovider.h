@@ -57,6 +57,8 @@ public:
 
     /** @brief defaultUnit is the unit the user works in: "cm", "mm" or "inch". */
     virtual QString                 defaultUnit() const { return QStringLiteral("cm"); }
+    /** @brief patternFile is the pattern's file, where the 3D setup is kept beside it; empty when not saved yet. */
+    virtual QString                 patternFile() const { return QString(); }
 };
 
 } // namespace Seamly3D

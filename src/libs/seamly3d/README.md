@@ -52,6 +52,7 @@ context on Windows, macOS and Linux.
 | `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric. Gives the stretch and ease of the draped garment. |
 | `FitMap` | Colors for the fit maps and their legend. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
+| `WorkspaceSetup` | What the workspace keeps for a pattern (placements, seams, fabric, fit map), in a `.seamly3d` file next to it. |
 | `Workspace3DIntegration` | The single hook into the 2D main window. |
 | `DxfReader`, `SvgReader`, `DxfPatternReader` (`dxfimport/`) | Reads ASCII DXF (blocks, polylines with arcs, splines, ellipses, text) and SVG (paths, shapes, transforms, `<use>`, text, real-world units), and finds the pattern pieces: AAMA/ASTM layers, or closed outlines. |
 | `OutlineFitter`, `DxfPatternConverter`, `DxfImportWizard` (`dxfimport/`) | Fits outlines with corners, lines and smooth curves, writes them as a parametric Seamly2D pattern (`.val`), and the wizard around it. |
@@ -239,6 +240,70 @@ waistline holding a garment up still stretches a few percent (about 4% for
 a skirt and 8% for trousers on the default body) where woven fabric would
 not, so it sits a little low.
 
+### The 3D setup is kept with the pattern
+
+What you set up in the 3D workspace is kept in a file next to the pattern,
+named after it: `shirt.val` gets `shirt.seamly3d`. The pattern file and its
+format do not change, so the pattern still opens in any Seamly2D. The file
+keeps:
+
+* where each piece goes, and its **Pair** and **Flip** boxes (a piece is
+  found again by its id, or by its name if the pattern was rebuilt);
+* the seams you switched off and the ones you added;
+* the fabric and the fit map.
+
+It is written half a second after each change, and read when the workspace
+opens the pattern. Opening a pattern and changing nothing writes nothing. A
+new pattern has no file yet: the setup is kept in the workspace, and written
+next to the pattern with the first change after you save it. After **Save
+As**, changes go next to the new file. A setup file that cannot be read is
+reported in the Pattern Pieces tab, and the pieces keep their guesses.
+
+It is JSON, so it can be read and kept in version control with the pattern:
+
+```json
+{
+    "fabric": "denim",
+    "fitMap": "ease",
+    "format": "seamly3d-setup",
+    "pieces": [
+        {
+            "flip": true,
+            "id": 42,
+            "name": "Sleeve",
+            "pair": true,
+            "placement": "right-sleeve"
+        }
+    ],
+    "seams": {
+        "added": [
+            {
+                "copyA": 0,
+                "copyB": 0,
+                "edgeA": 0,
+                "edgeB": 0,
+                "endA": 1,
+                "pieceA": 40,
+                "pieceB": 41,
+                "reversed": false,
+                "startA": 0
+            }
+        ],
+        "off": [
+            "40:0:1-41:1:1@0.000"
+        ]
+    },
+    "version": 1
+}
+```
+
+Placements are named (`front`, `back`, `left-side`, `right-side`,
+`left-sleeve`, `right-sleeve`, `lower-front`, `lower-back`,
+`left-leg-front`, `left-leg-back`, `right-leg-front`, `right-leg-back`,
+`waistband`, `collar`, `aside`, `hidden`), and a seam left open is named
+`pieceA:copyA:edgeA-pieceB:copyB:edgeB@startA`, edges counted from 0. A
+file from a newer version is read as far as it is understood.
+
 ### Importing SVG and DXF patterns
 
 **File > Import SVG or DXF Pattern...** converts a pattern drawing into a
@@ -323,18 +388,15 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 
 In order, because each one unblocks real patterns rather than test ones:
 
-1. **Save the 3D setup** (placements, pairs, flips, seams switched off or
-   added, fabric) in a file next to the pattern, so it survives closing it.
-   Nothing in the workspace is saved yet. The `.val` schema must not change.
-2. **Arrange real patterns:** move and turn pieces in 3D, and guess where
+1. **Arrange real patterns:** move and turn pieces in 3D, and guess where
    unnamed pieces go from their shape (imported patterns like FreeSewing's
    Devon have no names, so every piece is hung beside the body), so
    many-piece garments do not overlap.
-3. **Sew real patterns:** pick seam edges in 3D or on the 2D pieces, sew
+2. **Sew real patterns:** pick seam edges in 3D or on the 2D pieces, sew
    part of an edge between notches, and use notches to line seams up.
-4. **Fabric grain:** stretch that differs along the warp, the weft and the
+3. **Fabric grain:** stretch that differs along the warp, the weft and the
    bias, from the grainline, and a fabric per piece.
-5. **Self collision**, which layered garments, fold-over collars and
+4. **Self collision**, which layered garments, fold-over collars and
    tucked-in shirts need.
 
 ### 1. Avatar
@@ -402,7 +464,7 @@ In order, because each one unblocks real patterns rather than test ones:
 - [ ] Waistlines that hold without stretching (now 4% for a skirt, 8% for
   trousers): a stiffer solver for long edges under load
 - [ ] Fabric grain: different stretch along the warp, the weft and the bias
-- [ ] A fabric per piece, custom fabrics, saved with the pattern
+- [ ] A fabric per piece, custom fabrics, kept in the setup file
 - [ ] A smoothed collision body for the finest details
 - [ ] Faster: drape a garment in about a second (now 60 to 90 ms per frame
   on four cores for 4,000 to 6,000 particles, so 3 s of draping takes 5 to
@@ -427,7 +489,10 @@ In order, because each one unblocks real patterns rather than test ones:
 
 ### 7. Saving and workflow
 
-- [ ] Save the 3D setup next to the pattern (see **Next up**)
+- [x] The 3D setup (placements, seams, fabric, fit map) kept next to the
+  pattern in a `.seamly3d` file, without changing the `.val` format
+- [ ] Keep the arrangement of pieces moved by hand, and the body (which
+  model, build), in the setup too
 - [ ] Undo and redo in the 3D workspace
 - [ ] Keep the window layout, the camera and the last fabric between
   sessions

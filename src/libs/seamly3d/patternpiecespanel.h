@@ -39,6 +39,7 @@
 #include "piecearrangement.h"
 #include "piecemesher.h"
 #include "viewport3d.h"
+#include "workspacesetup.h"
 
 class QCheckBox;
 class QComboBox;
@@ -100,22 +101,15 @@ public:
     FitMap::Kind fitMap() const;
     void         setFitMap(FitMap::Kind kind);
 
-    /** @brief A seam between two edges, named by piece, copy (0, or 1 for the mirrored copy) and edge number. */
-    struct SeamSpec
-    {
-        quint32 pieceA{0};
-        int     copyA{0};
-        int     edgeA{0};
-        quint32 pieceB{0};
-        int     copyB{0};
-        int     edgeB{0};
-        bool    reversed{false};
-        double  startA{0.0};
-        double  endA{1.0};
-        bool    added{false}; ///< added by hand; otherwise found automatically
+    using SeamSpec = Seamly3D::SeamSpec;
 
-        QString key() const;
-    };
+    /** @brief The setup to keep (pieces, seams, fabric, fit map), and putting a kept one back. */
+    WorkspaceSetup setup() const;
+    void           applySetup(const WorkspaceSetup &setup);
+    /** @brief setupFile is where the setup is kept: next to the pattern; empty when the pattern is not saved yet. */
+    QString        setupFile() const;
+    /** @brief saveSetup writes the setup now (it is written by itself shortly after every change). */
+    bool           saveSetup(QString *error = nullptr);
 
     /**
      * @brief updateSeams finds the seams of the garment as placed in @p panels (from panels()). Seams switched off
@@ -145,6 +139,7 @@ signals:
     void seamsChanged();
     void highlightChanged();
     void fitMapChanged();
+    void setupChanged(); ///< the user changed something kept in the setup file
 
 public slots:
     void reload();
@@ -153,6 +148,7 @@ private:
     Q_DISABLE_COPY_MOVE(PatternPiecesPanel)
 
     void rebuildList();
+    void changed(); ///< something kept in the setup changed: save it soon
     void rebuildSeamList();
     void addSeamDialog();
     int  panelIndex(quint32 piece, int copy) const;
@@ -197,7 +193,9 @@ private:
     QVector<QPair<int, int>> m_highlight{};
     bool                     m_updatingSeams{false};
     QTimer      *m_followTimer;
+    QTimer      *m_saveTimer;
     bool         m_updatingList{false};
+    bool         m_applyingSetup{false};
 };
 
 } // namespace Seamly3D

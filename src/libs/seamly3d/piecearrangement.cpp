@@ -504,6 +504,46 @@ QString PieceArrangement::displayName(PiecePlacement placement)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+namespace
+{
+const char *const placementIds[] = {"front",           "back",           "left-side",       "right-side",
+                                    "left-sleeve",     "right-sleeve",   "lower-front",     "lower-back",
+                                    "left-leg-front",  "left-leg-back",  "right-leg-front", "right-leg-back",
+                                    "waistband",       "collar",         "aside",           "hidden"};
+static_assert(sizeof(placementIds) / sizeof(placementIds[0]) == static_cast<size_t>(PiecePlacement::Count),
+              "every placement needs an id");
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+QString PieceArrangement::placementId(PiecePlacement placement)
+{
+    const auto index = static_cast<int>(placement);
+    return index >= 0 && index < static_cast<int>(PiecePlacement::Count) ? QString::fromLatin1(placementIds[index])
+                                                                           : QStringLiteral("aside");
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+PiecePlacement PieceArrangement::placementFromId(const QString &id, bool *known)
+{
+    for (int i = 0; i < static_cast<int>(PiecePlacement::Count); ++i)
+    {
+        if (id == QLatin1String(placementIds[i]))
+        {
+            if (known != nullptr)
+            {
+                *known = true;
+            }
+            return static_cast<PiecePlacement>(i);
+        }
+    }
+    if (known != nullptr)
+    {
+        *known = false;
+    }
+    return PiecePlacement::Aside;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 QVector<Mesh> PieceArrangement::place(const Mesh &flat, const QRectF &bounds, PiecePlacement placement, bool pair,
                                       bool flip, const BodyFrame &frame, float asideStart)
 {

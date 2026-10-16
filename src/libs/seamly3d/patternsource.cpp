@@ -190,4 +190,10 @@ QString PatternSource::defaultUnit()
     return qApp->Settings()->getUnit();
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+QString PatternSource::patternFile()
+{
+    return qApp->getFilePath();
+}
+
 } // namespace Seamly3D

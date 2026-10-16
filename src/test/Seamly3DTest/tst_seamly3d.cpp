@@ -36,6 +36,9 @@
 #include <QProcess>
 #include <QStandardPaths>
 #include <QTemporaryDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QLabel>
 #include <QtTest>
 
 #include <limits>
@@ -65,6 +68,7 @@
 #include "piecearrangement.h"
 #include "piecemesher.h"
 #include "polygontriangulator.h"
+#include "workspacesetup.h"
 
 using namespace Seamly3D;
 
@@ -241,6 +245,8 @@ private slots:
     void bodyFrameFindsNeckAndWaist();
     void seamFinderSewsWaistband();
     void seamFinderSewsCollar();
+    void workspaceSetupFile();
+    void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
     void seamFinderSewsDart();
@@ -1307,8 +1313,10 @@ public:
     QVector<PatternPiece> pieces(QString *) override { return m_pieces; }
     QStringList applyMeasurements(BodyMeasurements &) override { return {}; }
     QMetaObject::Connection watch(QObject *, const std::function<void()> &) override { return {}; }
+    QString patternFile() const override { return m_file; }
 
     QVector<PatternPiece> m_pieces;
+    QString               m_file;
 };
 } // anonymous namespace
 
@@ -2235,6 +2243,162 @@ void TST_Seamly3D::seamFinderSewsCollar()
         QVERIFY(a.shape.bounds().center().x() * b.shape.bounds().center().x() > 0); // same side
     }
     QCOMPARE(collarParts, 4);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::workspaceSetupFile()
+{
+    // Next to the pattern, named after it; none for a pattern not saved yet.
+    QCOMPARE(WorkspaceSetup::fileFor(QStringLiteral("/patterns/my.shirt.val")),
+             QStringLiteral("/patterns/my.shirt.seamly3d"));
+    QVERIFY(WorkspaceSetup::fileFor(QString()).isEmpty());
+
+    // Placements are named in the file, so reordering them in the code does not change what a file means.
+    for (int i = 0; i < static_cast<int>(PiecePlacement::Count); ++i)
+    {
+        const auto placement = static_cast<PiecePlacement>(i);
+        bool known = false;
+        QCOMPARE(PieceArrangement::placementFromId(PieceArrangement::placementId(placement), &known), placement);
+        QVERIFY(known);
+    }
+    bool known = true;
+    QCOMPARE(PieceArrangement::placementFromId(QStringLiteral("on-the-moon"), &known), PiecePlacement::Aside);
+    QVERIFY(!known);
+
+    WorkspaceSetup setup;
+    setup.pieces.append({7, QStringLiteral("Front"), PiecePlacement::LeftLegFront, true, true});
+    setup.pieces.append({9, QStringLiteral("Collar"), PiecePlacement::Collar, false, false});
+    setup.switchedOff << QStringLiteral("7:0:1-9:0:2@0.000");
+    SeamSpec seam;
+    seam.pieceA = 7;
+    seam.copyA = 1;
+    seam.edgeA = 3;
+    seam.pieceB = 9;
+    seam.edgeB = 2;
+    seam.reversed = true;
+    seam.startA = 0.25;
+    seam.endA = 0.75;
+    setup.added.append(seam);
+    setup.fabric = QStringLiteral("denim");
+    setup.fitMap = FitMap::Kind::Ease;
+
+    WorkspaceSetup read;
+    QString error;
+    QVERIFY2(WorkspaceSetup::fromJson(setup.toJson(), &read, &error), qPrintable(error));
+    QCOMPARE(read.pieces.size(), 2);
+    QCOMPARE(read.pieces.at(0).id, quint32(7));
+    QCOMPARE(read.pieces.at(0).name, QStringLiteral("Front"));
+    QCOMPARE(read.pieces.at(0).placement, PiecePlacement::LeftLegFront);
+    QVERIFY(read.pieces.at(0).pair && read.pieces.at(0).flip);
+    QCOMPARE(read.pieces.at(1).placement, PiecePlacement::Collar);
+    QCOMPARE(read.switchedOff, setup.switchedOff);
+    QCOMPARE(read.added.size(), 1);
+    QCOMPARE(read.added.at(0).key(), seam.key());
+    QVERIFY(read.added.at(0).reversed && read.added.at(0).added);
+    QCOMPARE(read.added.at(0).endA, 0.75);
+    QCOMPARE(read.fabric, QStringLiteral("denim"));
+    QCOMPARE(read.fitMap, FitMap::Kind::Ease);
+
+    // Not a setup: refused, and the setup given is left as it was.
+    WorkspaceSetup untouched;
+    untouched.fabric = QStringLiteral("silk");
+    QVERIFY(!WorkspaceSetup::fromJson("{ not json", &untouched, &error));
+    QVERIFY(!error.isEmpty());
+    QVERIFY(!WorkspaceSetup::fromJson(R"({"format": "something-else"})", &untouched));
+    QCOMPARE(untouched.fabric, QStringLiteral("silk"));
+
+    // From a newer version: what is known is read, a placement not known leaves that piece out.
+    const QByteArray newer = R"({"format": "seamly3d-setup", "version": 9, "fabric": "linen", "future": true,
+        "pieces": [{"id": 1, "name": "A", "placement": "hovering"}, {"id": 2, "name": "B", "placement": "back"}]})";
+    QVERIFY(WorkspaceSetup::fromJson(newer, &read));
+    QCOMPARE(read.fabric, QStringLiteral("linen"));
+    QCOMPARE(read.pieces.size(), 1);
+    QCOMPARE(read.pieces.at(0).placement, PiecePlacement::Back);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::workspaceSetupKeptWithPattern()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          tshirtSleeve(3)};
+    provider->m_file = dir.filePath(QStringLiteral("shirt.val"));
+    const QString setupFile = dir.filePath(QStringLiteral("shirt.seamly3d"));
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+    PatternPiecesPanel::SeamSpec neck;
+    neck.pieceA = 1;
+    neck.edgeA = Neck;
+    neck.pieceB = 2;
+    neck.edgeB = Neck;
+
+    {
+        PatternPiecesPanel panel;
+        panel.setProvider(provider);
+        QCOMPARE(panel.setupFile(), setupFile);
+        panel.updateSeams(panel.panels(frame));
+        QVERIFY(!QFileInfo::exists(setupFile)); // nothing changed: nothing written
+
+        // The sleeve on the right arm, flipped; a seam left open, one added; denim; the ease map.
+        PatternPiecesPanel::Settings sleeve = panel.settings(3);
+        sleeve.placement = PiecePlacement::RightSleeve;
+        sleeve.flip = true;
+        panel.setSettings(3, sleeve);
+        auto *list = panel.findChild<QTreeWidget *>(QStringLiteral("seamList"));
+        QVERIFY(list != nullptr && list->topLevelItemCount() > 0);
+        list->topLevelItem(0)->setCheckState(0, Qt::Unchecked);
+        panel.addSeam(neck);
+        panel.setFabric(QStringLiteral("denim"));
+        panel.setFitMap(FitMap::Kind::Ease);
+
+        // Written by itself shortly after.
+        QTRY_VERIFY_WITH_TIMEOUT(QFileInfo::exists(setupFile), 3000);
+    }
+
+    // The pattern opened again: everything is back.
+    PatternPiecesPanel again;
+    again.setProvider(provider);
+    QCOMPARE(again.settings(3).placement, PiecePlacement::RightSleeve);
+    QVERIFY(again.settings(3).flip);
+    QCOMPARE(again.settings(1).placement, PiecePlacement::Front); // as guessed, kept too
+    QCOMPARE(again.fabric(), QStringLiteral("denim"));
+    QCOMPARE(again.fitMap(), FitMap::Kind::Ease);
+    const QVector<GarmentPanel> panels = again.panels(frame);
+    again.updateSeams(panels);
+    const WorkspaceSetup kept = again.setup();
+    QCOMPARE(kept.switchedOff.size(), 1);
+    QCOMPARE(kept.added.size(), 1);
+    QCOMPARE(kept.added.at(0).key(), neck.key());
+    // Found seams but the one left open, plus the one added.
+    QCOMPARE(again.seams(panels).size(), again.foundSeams().size() - 1 + 1);
+
+    // A piece whose id changed (the pattern was rebuilt) is found by its name.
+    auto rebuilt = std::make_shared<FakeProvider>(*provider);
+    rebuilt->m_pieces[2].id = 33;
+    PatternPiecesPanel renamed;
+    renamed.setProvider(rebuilt);
+    QCOMPARE(renamed.settings(33).placement, PiecePlacement::RightSleeve);
+
+    // A new pattern, not saved yet: nothing is written.
+    auto unsaved = std::make_shared<FakeProvider>(*provider);
+    unsaved->m_file.clear();
+    PatternPiecesPanel fresh;
+    fresh.setProvider(unsaved);
+    QVERIFY(fresh.setupFile().isEmpty());
+    QVERIFY(!fresh.saveSetup());
+
+    // A broken setup file is reported, and the pieces keep their guesses.
+    QFile broken(setupFile);
+    QVERIFY(broken.open(QIODevice::WriteOnly));
+    broken.write("{ broken");
+    broken.close();
+    PatternPiecesPanel reported;
+    reported.setProvider(provider);
+    QCOMPARE(reported.settings(3).placement, PiecePlacement::LeftSleeve);
+    const QList<QLabel *> labels = reported.findChildren<QLabel *>();
+    QVERIFY(std::any_of(labels.cbegin(), labels.cend(),
+                        [](const QLabel *label) { return label->text().contains(QStringLiteral("3D setup")); }));
 }
 
 //---------------------------------------------------------------------------------------------------------------------

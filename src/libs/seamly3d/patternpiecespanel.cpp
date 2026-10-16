@@ -27,6 +27,8 @@
 #include "patternpiecespanel.h"
 
 #include <QCheckBox>
+#include <QDir>
+#include <QFileInfo>
 #include <QIcon>
 #include <QDialogButtonBox>
 #include <QDialog>
@@ -92,6 +94,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     , m_removeSeamButton(new QPushButton(tr("Remove"), this))
     , m_showSeamsCheck(new QCheckBox(tr("Show seams"), this))
     , m_followTimer(new QTimer(this))
+    , m_saveTimer(new QTimer(this))
 {
     auto *layout = new QVBoxLayout(this);
 
@@ -130,6 +133,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
                 s.pair = item->checkState(PairColumn) == Qt::Checked;
                 s.flip = item->checkState(FlipColumn) == Qt::Checked;
                 m_settings.insert(id, s);
+                changed();
                 emit arrangementChanged();
             });
     layout->addWidget(m_list, 1);
@@ -159,7 +163,12 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
                                    tr("%1 g/m%2").arg(fabric.gramsPerSquareMeter).arg(QChar(0x00B2)), Qt::ToolTipRole);
     }
     m_fabricCombo->setToolTip(tr("What the garment is made of: how it stretches, drapes and weighs"));
-    connect(m_fabricCombo, &QComboBox::currentIndexChanged, this, &PatternPiecesPanel::fabricChanged);
+    connect(m_fabricCombo, &QComboBox::currentIndexChanged, this,
+            [this]()
+            {
+                changed();
+                emit fabricChanged();
+            });
     for (const FitMap::Kind kind : {FitMap::Kind::None, FitMap::Kind::Stretch, FitMap::Kind::Ease})
     {
         m_fitMapCombo->addItem(FitMap::name(kind), static_cast<int>(kind));
@@ -176,6 +185,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
                     m_legendLow->setText(FitMap::lowLabel(kind));
                     m_legendHigh->setText(FitMap::highLabel(kind));
                 }
+                changed();
                 emit fitMapChanged();
             });
     auto *legendLayout = new QGridLayout(m_legend);
@@ -209,6 +219,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
                 {
                     m_switchedOff.insert(key);
                 }
+                changed();
                 emit seamsChanged();
             });
     connect(m_seamList, &QTreeWidget::currentItemChanged, this,
@@ -235,6 +246,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
             {
                 m_switchedOff.clear();
                 rebuildSeamList();
+                changed();
                 emit seamsChanged();
             });
     m_addSeamButton->setToolTip(tr("Sew two edges together"));
@@ -258,6 +270,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
                     m_switchedOff.insert(key);
                 }
                 rebuildSeamList();
+                changed();
                 emit seamsChanged();
             });
     m_showSeamsCheck->setChecked(true);
@@ -279,12 +292,22 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     m_followTimer->setSingleShot(true);
     m_followTimer->setInterval(400);
     connect(m_followTimer, &QTimer::timeout, this, &PatternPiecesPanel::reload);
+    // The setup is written shortly after a change, not at every click.
+    m_saveTimer->setSingleShot(true);
+    m_saveTimer->setInterval(500);
+    connect(m_saveTimer, &QTimer::timeout, this, [this]() { saveSetup(); });
 
     setProvider(nullptr);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-PatternPiecesPanel::~PatternPiecesPanel() = default;
+PatternPiecesPanel::~PatternPiecesPanel()
+{
+    if (m_saveTimer->isActive())
+    {
+        saveSetup(); // a change made just before closing
+    }
+}
 
 //---------------------------------------------------------------------------------------------------------------------
 void PatternPiecesPanel::setProvider(const std::shared_ptr<PatternProvider> &provider)
@@ -311,6 +334,142 @@ void PatternPiecesPanel::setProvider(const std::shared_ptr<PatternProvider> &pro
                         }
                     });
     reload();
+
+    // What was set up for this pattern before.
+    const QString file = setupFile();
+    if (!file.isEmpty() && QFileInfo::exists(file))
+    {
+        WorkspaceSetup kept;
+        QString error;
+        if (WorkspaceSetup::load(file, &kept, &error))
+        {
+            applySetup(kept);
+        }
+        else
+        {
+            m_status->setText(tr("Could not read the 3D setup %1: %2").arg(QDir::toNativeSeparators(file), error));
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+WorkspaceSetup PatternPiecesPanel::setup() const
+{
+    WorkspaceSetup result;
+    for (const PatternPiece &piece : m_pieces)
+    {
+        const Settings s = settings(piece.id);
+        PieceSetup kept;
+        kept.id = piece.id;
+        kept.name = piece.name;
+        kept.placement = s.placement;
+        kept.pair = s.pair;
+        kept.flip = s.flip;
+        result.pieces.append(kept);
+    }
+    result.switchedOff = m_switchedOff.values();
+    std::sort(result.switchedOff.begin(), result.switchedOff.end());
+    result.added = m_addedSeams;
+    result.fabric = fabric();
+    result.fitMap = fitMap();
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::applySetup(const WorkspaceSetup &setup)
+{
+    m_applyingSetup = true;
+    // Each piece by its id; one whose id changed (the pattern was rebuilt) by its name, if that is unique.
+    for (const PieceSetup &kept : setup.pieces)
+    {
+        quint32 id = 0;
+        bool found = false;
+        for (const PatternPiece &piece : m_pieces)
+        {
+            if (piece.id == kept.id)
+            {
+                id = piece.id;
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+        {
+            int named = 0;
+            for (const PatternPiece &piece : m_pieces)
+            {
+                if (piece.name == kept.name)
+                {
+                    id = piece.id;
+                    ++named;
+                }
+            }
+            found = named == 1;
+        }
+        if (found)
+        {
+            Settings s;
+            s.placement = kept.placement;
+            s.pair = kept.pair;
+            s.flip = kept.flip;
+            m_settings.insert(id, s);
+        }
+    }
+    m_switchedOff = QSet<QString>(setup.switchedOff.cbegin(), setup.switchedOff.cend());
+    m_addedSeams = setup.added;
+    for (SeamSpec &seam : m_addedSeams)
+    {
+        seam.added = true;
+    }
+    if (!setup.fabric.isEmpty())
+    {
+        setFabric(setup.fabric);
+    }
+    setFitMap(setup.fitMap);
+    m_applyingSetup = false;
+
+    rebuildList();
+    rebuildSeamList();
+    emit arrangementChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString PatternPiecesPanel::setupFile() const
+{
+    return m_provider != nullptr ? WorkspaceSetup::fileFor(m_provider->patternFile()) : QString();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool PatternPiecesPanel::saveSetup(QString *error)
+{
+    m_saveTimer->stop();
+    const QString file = setupFile();
+    if (file.isEmpty())
+    {
+        return false; // a new pattern: kept here until it is saved, then written with the next change
+    }
+    QString reason;
+    if (!setup().save(file, &reason))
+    {
+        m_status->setText(tr("Could not save the 3D setup %1: %2").arg(QDir::toNativeSeparators(file), reason));
+        if (error != nullptr)
+        {
+            *error = reason;
+        }
+        return false;
+    }
+    return true;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::changed()
+{
+    if (m_applyingSetup)
+    {
+        return;
+    }
+    m_saveTimer->start();
+    emit setupChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -375,6 +534,7 @@ PatternPiecesPanel::Settings PatternPiecesPanel::settings(quint32 id) const
 void PatternPiecesPanel::setSettings(quint32 id, const Settings &settings)
 {
     m_settings.insert(id, settings);
+    changed();
     rebuildList();
     emit arrangementChanged();
 }
@@ -412,6 +572,7 @@ void PatternPiecesPanel::rebuildList()
                     Settings changed = settings(id);
                     changed.placement = static_cast<PiecePlacement>(placement->currentData().toInt());
                     m_settings.insert(id, changed);
+                    this->changed();
                     emit arrangementChanged();
                 });
         m_list->setItemWidget(item, PlacementColumn, placement);
@@ -605,13 +766,6 @@ QVector<double> shares(const GarmentPanel &panel, const QVector<int> &vertices)
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
-QString PatternPiecesPanel::SeamSpec::key() const
-{
-    return QStringLiteral("%1:%2:%3-%4:%5:%6@%7")
-        .arg(pieceA).arg(copyA).arg(edgeA).arg(pieceB).arg(copyB).arg(edgeB).arg(startA, 0, 'f', 3);
-}
-
-//---------------------------------------------------------------------------------------------------------------------
 int PatternPiecesPanel::panelIndex(quint32 piece, int copy) const
 {
     for (int i = 0; i < m_seamPanels.size(); ++i)
@@ -710,6 +864,7 @@ void PatternPiecesPanel::addSeam(const SeamSpec &spec)
     m_switchedOff.remove(added.key());
     m_addedSeams.append(added);
     rebuildSeamList();
+    changed();
     emit seamsChanged();
 }
 
