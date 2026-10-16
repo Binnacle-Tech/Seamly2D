@@ -54,6 +54,9 @@ public:
     virtual QVector<PatternPiece>   pieces(QString *error) = 0;
     virtual QStringList             applyMeasurements(BodyMeasurements &measurements) = 0;
     virtual QMetaObject::Connection watch(QObject *context, const std::function<void()> &changed) = 0;
+
+    /** @brief defaultUnit is the unit the user works in: "cm", "mm" or "inch". */
+    virtual QString                 defaultUnit() const { return QStringLiteral("cm"); }
 };
 
 } // namespace Seamly3D

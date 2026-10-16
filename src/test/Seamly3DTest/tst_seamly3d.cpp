@@ -26,6 +26,7 @@
 
 #include <QBuffer>
 #include <QDate>
+#include <QDoubleSpinBox>
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <QVector2D>
@@ -34,6 +35,7 @@
 #include <limits>
 
 #include "bodymeasurements.h"
+#include "bodymeasurementspanel.h"
 #include "clothsimulator.h"
 #include "garment.h"
 #include "makehuman/makehumanfitter.h"
@@ -222,6 +224,7 @@ private slots:
     void clothDrapesOverSphere();
     void clothSewsTube();
     void clothSewsShirtOnBody();
+    void measurementsPanelUnits();
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1852,6 +1855,36 @@ void TST_Seamly3D::clothSewsShirtOnBody()
     }
     const auto shoulders = static_cast<float>(measurements.value(BodyMeasurement::ShoulderTipHeight));
     QVERIFY2(top > shoulders, qPrintable(QStringLiteral("%1 below the shoulders at %2").arg(top).arg(shoulders)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::measurementsPanelUnits()
+{
+    // The panel shows the measurements in Seamly2D's units; the body is always in centimeters.
+    BodyMeasurementsPanel panel;
+    QCOMPARE(panel.unit(), QStringLiteral("cm"));
+    const auto heightBox = [&panel]()
+    {
+        // The first measurement field is the height.
+        return panel.findChildren<QDoubleSpinBox *>().constFirst();
+    };
+    QCOMPARE(heightBox()->value(), 168.0);
+
+    panel.setUnit(QStringLiteral("mm"));
+    QCOMPARE(panel.unit(), QStringLiteral("mm"));
+    QCOMPARE(heightBox()->value(), 1680.0);
+    QVERIFY(heightBox()->suffix().contains(QStringLiteral("mm")));
+
+    panel.setUnit(QStringLiteral("inch"));
+    QVERIFY(qAbs(heightBox()->value() - 168.0 / 2.54) < 0.01);
+
+    // Typing in inches still gives the body in centimeters.
+    heightBox()->setValue(81);
+    QVERIFY(qAbs(panel.measurements().value(BodyMeasurement::Height) - 81 * 2.54) < 1e-6);
+
+    panel.setUnit(QStringLiteral("furlong")); // unknown: keep the current unit
+    QCOMPARE(panel.unit(), QStringLiteral("inch"));
+    QCOMPARE(FakeProvider().defaultUnit(), QStringLiteral("cm"));
 }
 
 QTEST_MAIN(TST_Seamly3D)

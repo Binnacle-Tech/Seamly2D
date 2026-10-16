@@ -66,6 +66,9 @@ public:
 
     /** @brief watch calls @p changed whenever the pattern changes, until @p context is destroyed. */
     static QMetaObject::Connection watch(QObject *context, const std::function<void()> &changed);
+
+    /** @brief defaultUnit is the unit chosen in Seamly2D's preferences (asked on first start): "cm", "mm" or "inch". */
+    static QString defaultUnit();
 };
 
 /**
@@ -83,6 +86,7 @@ public:
     {
         return PatternSource::watch(context, changed);
     }
+    QString defaultUnit() const override { return PatternSource::defaultUnit(); }
 };
 
 } // namespace Seamly3D

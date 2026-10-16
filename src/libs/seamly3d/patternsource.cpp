@@ -33,6 +33,7 @@
 #include "../ifc/xml/vabstractpattern.h"
 #include "../vmisc/def.h"
 #include "../vmisc/vabstractapplication.h"
+#include "../vmisc/vcommonsettings.h"
 #include "../vpatterndb/floatItemData/vpiecelabeldata.h"
 #include "../vpatterndb/variables/measurement_variable.h"
 #include "../vpatterndb/vcontainer.h"
@@ -181,6 +182,12 @@ QMetaObject::Connection PatternSource::watch(QObject *context, const std::functi
         return {};
     }
     return QObject::connect(document, &VAbstractPattern::patternChanged, context, [changed]() { changed(); });
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString PatternSource::defaultUnit()
+{
+    return qApp->Settings()->getUnit();
 }
 
 } // namespace Seamly3D

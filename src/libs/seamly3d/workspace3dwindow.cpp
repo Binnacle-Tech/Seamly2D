@@ -137,6 +137,10 @@ Workspace3DWindow::~Workspace3DWindow()
 void Workspace3DWindow::setPatternProvider(const std::shared_ptr<PatternProvider> &provider)
 {
     m_provider = provider;
+    if (provider != nullptr)
+    {
+        m_measurementsPanel->setUnit(provider->defaultUnit()); // the unit the user works in, in 2D
+    }
     m_piecesPanel->setProvider(provider);
     if (provider != nullptr && !m_piecesPanel->pieces().isEmpty())
     {

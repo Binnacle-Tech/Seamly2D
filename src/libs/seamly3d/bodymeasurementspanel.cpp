@@ -80,8 +80,9 @@ BodyMeasurementsPanel::BodyMeasurementsPanel(QWidget *parent)
     layout->addWidget(m_sourceLabel);
 
     auto *options = new QFormLayout;
-    m_unitComboBox->addItem(tr("Centimeters"), 1.0);
-    m_unitComboBox->addItem(tr("Inches"), 2.54);
+    m_unitComboBox->addItem(tr("Centimeters"), QStringLiteral("cm"));
+    m_unitComboBox->addItem(tr("Millimeters"), QStringLiteral("mm"));
+    m_unitComboBox->addItem(tr("Inches"), QStringLiteral("inch"));
     connect(m_unitComboBox, &QComboBox::currentIndexChanged, this, &BodyMeasurementsPanel::unitChanged);
     options->addRow(tr("Units:"), m_unitComboBox);
     m_proportionalCheckBox->setChecked(true);
@@ -313,7 +314,24 @@ void BodyMeasurementsPanel::unitChanged()
 //---------------------------------------------------------------------------------------------------------------------
 double BodyMeasurementsPanel::unitFactor() const
 {
-    return m_unitComboBox->currentData().toDouble();
+    const QString code = unit();
+    return code == QLatin1String("inch") ? 2.54 : code == QLatin1String("mm") ? 0.1 : 1.0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QString BodyMeasurementsPanel::unit() const
+{
+    return m_unitComboBox->currentData().toString();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void BodyMeasurementsPanel::setUnit(const QString &unit)
+{
+    const int index = m_unitComboBox->findData(unit);
+    if (index >= 0)
+    {
+        m_unitComboBox->setCurrentIndex(index); // unknown units keep the current one
+    }
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -330,12 +348,17 @@ void BodyMeasurementsPanel::updateSpinBoxes()
     }
 
     const double factor = unitFactor();
-    const QString suffix = factor == 1.0 ? tr(" cm") : tr(" in");
+    const QString code = unit();
+    const bool inches = code == QLatin1String("inch");
+    const bool millimeters = code == QLatin1String("mm");
+    const QString suffix = inches ? tr(" in") : millimeters ? tr(" mm") : tr(" cm");
     for (int i = 0; i < m_spinBoxes.size(); ++i)
     {
         QDoubleSpinBox *spinBox = m_spinBoxes.at(i);
         const QSignalBlocker blocker(spinBox);
         spinBox->setSuffix(suffix);
+        spinBox->setDecimals(inches ? 2 : millimeters ? 0 : 1);
+        spinBox->setSingleStep(inches ? 0.25 : millimeters ? 5.0 : 0.5);
         spinBox->setRange(1.0 / factor, 300.0 / factor);
         spinBox->setValue(m_measurements.value(static_cast<BodyMeasurement>(i)) / factor);
     }
