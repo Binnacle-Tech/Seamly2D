@@ -31,6 +31,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QOpenGLWidget>
 #include <QSignalBlocker>
 
 #include "measurementguide.h"
@@ -70,6 +71,18 @@ Workspace3DIntegration::Workspace3DIntegration(QMainWindow *host)
     , m_host(host)
     , m_action(new QAction(tr("3D Workspace"), this))
 {
+    // The 3D viewport is an OpenGL widget. Adding the first one to a window already on screen makes Qt destroy and
+    // recreate that window (to draw it through OpenGL), so the whole main window would vanish and come back when the
+    // workspace opens. A hidden OpenGL widget, there before the main window is first shown, makes it OpenGL capable
+    // from the start. It is never shown, so it never creates an OpenGL context of its own.
+    if (!host->isVisible())
+    {
+        auto *placeholder = new QOpenGLWidget(host);
+        placeholder->setObjectName(QStringLiteral("seamly3dOpenGLPlaceholder"));
+        placeholder->setFixedSize(0, 0);
+        placeholder->hide();
+    }
+
     m_action->setObjectName(QStringLiteral("seamly3dWorkspace_Action"));
     m_action->setToolTip(tr("Show or hide the 3D workspace"));
     m_action->setCheckable(true);
