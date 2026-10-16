@@ -92,6 +92,15 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     connect(m_piecesPanel, &PatternPiecesPanel::simulationResetRequested, this, &Workspace3DWindow::updatePieces);
     connect(m_piecesPanel, &PatternPiecesPanel::fabricChanged, this, &Workspace3DWindow::fabricChanged);
     connect(m_piecesPanel, &PatternPiecesPanel::seamsChanged, this, &Workspace3DWindow::seamsChanged);
+    connect(m_viewport, &Viewport3D::overlayPressed, this,
+            [this](int index)
+            {
+                if (m_simulator.isEmpty() && index >= 0 && index < m_arranged.size())
+                {
+                    m_piecesPanel->selectPiece(m_arranged.at(index).pieceId);
+                }
+            });
+    connect(m_viewport, &Viewport3D::overlayDragged, this, &Workspace3DWindow::pieceDragged);
     connect(m_piecesPanel, &PatternPiecesPanel::highlightChanged, this, &Workspace3DWindow::showSeamLines);
     connect(m_piecesPanel, &PatternPiecesPanel::fitMapChanged, this,
             [this]()
@@ -186,9 +195,45 @@ void Workspace3DWindow::updatePieces()
 {
     // The pieces, their arrangement or the body changed: a garment sewn before no longer applies.
     resetSimulation();
-    m_viewport->setOverlays(m_piecesPanel->overlays(bodyFrame()));
-    m_piecesPanel->updateSeams(m_piecesPanel->panels(bodyFrame()));
+    m_arranged = m_piecesPanel->panels(bodyFrame());
+    m_viewport->setOverlays(PatternPiecesPanel::overlays(m_arranged));
+    m_piecesPanel->updateSeams(m_arranged);
     showSeamLines();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::pieceDragged(int index, const QVector3D &point, const QVector3D &delta)
+{
+    if (!m_simulator.isEmpty() || index < 0 || index >= m_arranged.size())
+    {
+        return;
+    }
+    // Along the axis of the piece's place as it looks on the screen moves it along (up the body, the arm, the leg);
+    // across it, turns it around. So a drag up a slanting sleeve slides it up the arm without turning it.
+    const GarmentPanel &panel = m_arranged.at(index);
+    const PiecePlacement placement = m_piecesPanel->settings(panel.pieceId).placement;
+    const BodyFrame frame = bodyFrame();
+    QVector3D origin;
+    QVector3D up;
+    PieceArrangement::axis(placement, frame, point.x() < 0 ? -1.0f : 1.0f, &origin, &up);
+    const QVector3D forward = (m_viewport->camera().target() - m_viewport->camera().eye()).normalized();
+    const auto onScreen = [&forward](const QVector3D &v) { return v - forward * QVector3D::dotProduct(v, forward); };
+
+    const QVector3D upOnScreen = onScreen(up);
+    const float upLength = qMax(0.3f, upOnScreen.length());
+    const QVector3D along = upOnScreen.normalized();
+    const float lift = QVector3D::dotProduct(delta, along) / upLength;
+
+    float degrees = 0;
+    const QVector3D fromAxis = point - origin - up * QVector3D::dotProduct(point - origin, up);
+    if (placement != PiecePlacement::Aside && fromAxis.length() > 1e-3f)
+    {
+        const QVector3D tangent = QVector3D::crossProduct(up, fromAxis.normalized());
+        const QVector3D across = delta - along * QVector3D::dotProduct(delta, along);
+        const float arc = QVector3D::dotProduct(across, onScreen(tangent).normalized());
+        degrees = qRadiansToDegrees(arc / PieceArrangement::aroundRadius(placement, frame));
+    }
+    m_piecesPanel->nudge(panel.pieceId, panel.copy, degrees, lift);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -242,6 +287,7 @@ void Workspace3DWindow::resetSimulation()
 {
     m_simulationTimer->stop();
     m_simulator.clear();
+    m_viewport->setOverlaysMovable(true);
     m_piecesPanel->setSimulationRunning(false);
     m_piecesPanel->setSimulationStatus(QString());
     m_piecesPanel->setSimulationDetails(QString());
@@ -291,6 +337,7 @@ void Workspace3DWindow::setSimulationRunning(bool run)
         m_simulator.setSettings(FabricPreset::preset(m_piecesPanel->fabric()).apply(ClothSettings()));
         m_simulator.setBody(m_viewport->mesh());
         m_simulator.setGarment(panels, seams);
+        m_viewport->setOverlaysMovable(false); // the draped garment: Reset to move the pieces again
         m_settledFrames = 0;
         m_piecesPanel->setSimulationStatus(tr("%n seam(s) to sew.", nullptr, static_cast<int>(seams.size())));
         m_piecesPanel->setSimulationDetails(details.join(QLatin1Char('\n')));

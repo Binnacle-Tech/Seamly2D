@@ -145,6 +145,12 @@ QByteArray WorkspaceSetup::toJson() const
         object.insert(QStringLiteral("placement"), PieceArrangement::placementId(piece.placement));
         object.insert(QStringLiteral("pair"), piece.pair);
         object.insert(QStringLiteral("flip"), piece.flip);
+        if (!piece.adjustment.isNull())
+        {
+            object.insert(QStringLiteral("lift"), static_cast<double>(piece.adjustment.lift));
+            object.insert(QStringLiteral("around"), static_cast<double>(piece.adjustment.around));
+            object.insert(QStringLiteral("turn"), static_cast<double>(piece.adjustment.turn));
+        }
         pieceArray.append(object);
     }
     root.insert(QStringLiteral("pieces"), pieceArray);
@@ -203,6 +209,11 @@ bool WorkspaceSetup::fromJson(const QByteArray &json, WorkspaceSetup *setup, QSt
         }
         piece.pair = object.value(QStringLiteral("pair")).toBool();
         piece.flip = object.value(QStringLiteral("flip")).toBool();
+        const auto number = [&object](const char *key, double limit)
+        { return static_cast<float>(qBound(-limit, object.value(QLatin1String(key)).toDouble(), limit)); };
+        piece.adjustment.lift = number("lift", 150.0);
+        piece.adjustment.around = number("around", 180.0);
+        piece.adjustment.turn = number("turn", 180.0);
         result.pieces.append(piece);
     }
     const QJsonObject seams = root.value(QStringLiteral("seams")).toObject();

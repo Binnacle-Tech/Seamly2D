@@ -28,6 +28,7 @@
 #define SEAMLY3D_PIECEARRANGEMENT_H
 
 #include <QCoreApplication>
+#include <QPolygonF>
 #include <QRectF>
 #include <QString>
 #include <QVector>
@@ -111,6 +112,23 @@ struct BodyFrame
 };
 
 /**
+ * @brief Moves a piece away from where its placement puts it, by hand. Zero leaves it there.
+ *
+ * Lift and around are along and about the axis of the piece's place: the body's for the torso, skirts, bands and
+ * pieces beside the body (up, and around seen from above), the arm's for sleeves and the leg's for trouser legs (up
+ * toward the shoulder or the hip, and around the limb). A mirrored copy moves the mirrored way, so pairs stay
+ * symmetric. Turn spins the flat piece in its own plane before it is placed, for pieces drawn sideways.
+ */
+struct PieceAdjustment
+{
+    float lift{0.0f};   ///< centimeters, up
+    float around{0.0f}; ///< degrees
+    float turn{0.0f};   ///< degrees, counterclockwise as drawn
+
+    bool isNull() const { return qFuzzyIsNull(lift) && qFuzzyIsNull(around) && qFuzzyIsNull(turn); }
+};
+
+/**
  * @brief Places flat piece meshes around the body: the starting shape that sewing and draping begin from.
  *
  * Torso pieces are wrapped around a cylinder just outside the body, sleeves around cylinders beside the arms; the
@@ -132,8 +150,22 @@ class PieceArrangement
     Q_DECLARE_TR_FUNCTIONS(Seamly3D::PieceArrangement)
 
 public:
-    /** @brief guess picks a placement from the piece name ("Front bodice", "Sleeve", "Rückenteil"...). */
-    static PiecePlacement guess(const QString &name);
+    /**
+     * @brief guess picks a placement from the piece name ("Front bodice", "Sleeve", "Rückenteil"...); a name that
+     * says nothing ("Piece 7", as imported from a DXF file without names) goes by @p outline instead, when given.
+     */
+    static PiecePlacement guess(const QString &name, const QPolygonF &outline = QPolygonF());
+
+    /**
+     * @brief guessFromShape picks a placement from the outline alone (centimeters): small pieces (pockets, flaps,
+     * cuffs, yokes) and long upright strips (facings) beside the body, long flat strips as waistbands (50 cm and
+     * more) or collars, pieces with a domed top in the middle as sleeves, very long ones (80 cm and more) as trouser
+     * legs, the rest on the front.
+     */
+    static PiecePlacement guessFromShape(const QPolygonF &outline);
+
+    /** @brief isYoke tells a yoke by its name: it goes on top of the front or back, the other pieces there below it. */
+    static bool isYoke(const QString &name);
 
     static QString displayName(PiecePlacement placement);
 
@@ -147,9 +179,24 @@ public:
      * @param bounds the piece outline's bounding box
      * @param flip mirror the piece (when the guess put its center line on the wrong side)
      * @param asideStart where along the row of pieces hung beside the body this one starts (centimeters)
+     * @param adjustment moved by hand from there
      */
     static QVector<Mesh> place(const Mesh &flat, const QRectF &bounds, PiecePlacement placement, bool pair, bool flip,
-                               const BodyFrame &frame, float asideStart = 0);
+                               const BodyFrame &frame, float asideStart = 0,
+                               const PieceAdjustment &adjustment = PieceAdjustment());
+
+    /** @brief aroundRadius is the radius a piece goes around at in its place, to turn distances into angles. */
+    static float aroundRadius(PiecePlacement placement, const BodyFrame &frame);
+
+    /**
+     * @brief axis is what a piece in @p placement is lifted along and turned about: a point on it, and up along it.
+     * @param side +1 for a piece left of the center (the left arm or leg), -1 for one right of it
+     */
+    static void axis(PiecePlacement placement, const BodyFrame &frame, float side, QVector3D *origin, QVector3D *up);
+
+private:
+    static QVector<Mesh> placeAsDrawn(const Mesh &flat, const QRectF &bounds, PiecePlacement placement, bool pair,
+                                      bool flip, const BodyFrame &frame, float asideStart);
 };
 
 } // namespace Seamly3D

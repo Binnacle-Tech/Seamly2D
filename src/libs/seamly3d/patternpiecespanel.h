@@ -43,6 +43,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QTimer;
@@ -70,15 +71,24 @@ public:
     /** @brief Per piece arrangement, kept by piece id across reloads. */
     struct Settings
     {
-        PiecePlacement placement{PiecePlacement::Aside};
-        bool           pair{false};
-        bool           flip{false};
+        PiecePlacement  placement{PiecePlacement::Aside};
+        bool            pair{false};
+        bool            flip{false};
+        PieceAdjustment adjustment{}; ///< moved by hand from where the placement puts it
     };
 
     void     setPieces(const QVector<PatternPiece> &pieces);
     QVector<PatternPiece> pieces() const;
     Settings settings(quint32 id) const;
     void     setSettings(quint32 id, const Settings &settings);
+    /**
+     * @brief nudge moves a piece by hand: around its place by @p around degrees and up by @p lift cm, as seen on its
+     * copy @p copy (the mirrored copy moves the mirrored way, so a drag on it moves it where the mouse goes).
+     */
+    void     nudge(quint32 id, int copy, float around, float lift);
+    /** @brief selectPiece shows the piece in the list, to adjust it there. */
+    void     selectPiece(quint32 id);
+    quint32  selectedPiece() const; ///< 0 when none
 
     /** @brief panels returns the pieces (and their mirrored copies) placed around a body of these sizes. */
     QVector<GarmentPanel> panels(const BodyFrame &frame) const;
@@ -148,6 +158,7 @@ private:
     Q_DISABLE_COPY_MOVE(PatternPiecesPanel)
 
     void rebuildList();
+    void showAdjustment();
     void changed(); ///< something kept in the setup changed: save it soon
     void rebuildSeamList();
     void addSeamDialog();
@@ -168,6 +179,11 @@ private:
     mutable QHash<quint32, FlatPiece> m_flatPieces{};
 
     QTreeWidget *m_list;
+    QWidget        *m_adjustBox;
+    QDoubleSpinBox *m_liftSpin;
+    QDoubleSpinBox *m_aroundSpin;
+    QDoubleSpinBox *m_turnSpin;
+    QPushButton    *m_resetAdjustButton;
     QLabel      *m_status;
     QPushButton *m_reloadButton;
     QPushButton *m_measurementsButton;

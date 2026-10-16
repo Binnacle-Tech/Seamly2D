@@ -48,7 +48,8 @@ namespace Seamly3D
  * Renders a shaded mesh (avatar), and overlay meshes in their own colors (pattern pieces), over a ground grid. Uses only QtGui/QtOpenGL with GLSL that runs on OpenGL 2.1 and
  * OpenGL ES 2.0 so it works with the default surface format on every platform Seamly2D supports.
  *
- * Mouse: left drag orbits, right or middle drag (or Shift + left drag) pans, the wheel zooms.
+ * Mouse: left drag orbits, right or middle drag (or Shift + left drag) pans, the wheel zooms. With pieces movable,
+ * Ctrl + left drag on a piece moves it (overlayDragged).
  */
 class Viewport3D : public QOpenGLWidget, protected QOpenGLFunctions
 {
@@ -88,6 +89,15 @@ public:
     void        setLines(const QVector<LineSet> &lines);
     const QVector<LineSet> &lines() const;
 
+    /** @brief With pieces movable, Ctrl + left drag on an overlay reports where to move it. */
+    void        setOverlaysMovable(bool movable);
+    bool        overlaysMovable() const;
+    /** @brief overlayAt returns the overlay under a point of the widget (-1 for none), and where it is hit. */
+    int         overlayAt(const QPointF &position, QVector3D *hit = nullptr) const;
+    /** @brief pickOverlay returns the overlay a ray hits first (-1 for none), and how far along the ray. */
+    static int  pickOverlay(const QVector<Overlay> &overlays, const QVector3D &origin, const QVector3D &direction,
+                            float *distance = nullptr);
+
     bool        isGridVisible() const;
 
     OrbitCamera       &camera();
@@ -95,6 +105,11 @@ public:
 
     QSize       minimumSizeHint() const override;
     QSize       sizeHint() const override;
+
+signals:
+    /** @brief A piece was clicked with Ctrl held (to select it), or is being dragged by @p delta from @p point. */
+    void overlayPressed(int index);
+    void overlayDragged(int index, const QVector3D &point, const QVector3D &delta);
 
 public slots:
     void        setGridVisible(bool visible);
@@ -114,7 +129,7 @@ protected:
 private:
     Q_DISABLE_COPY_MOVE(Viewport3D)
 
-    enum class DragMode : char { None, Orbit, Pan };
+    enum class DragMode : char { None, Orbit, Pan, Overlay };
 
     void        cleanupGL();
     struct GpuMesh
@@ -159,6 +174,9 @@ private:
     QColor      m_gridColor{140, 140, 140};
 
     DragMode    m_dragMode{DragMode::None};
+    bool        m_overlaysMovable{false};
+    int         m_dragOverlay{-1};
+    QVector3D   m_dragPoint{};
     QPoint      m_lastMousePos{};
 };
 

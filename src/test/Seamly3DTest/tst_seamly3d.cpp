@@ -27,6 +27,7 @@
 #include <QBuffer>
 #include <QDate>
 #include <QDoubleSpinBox>
+#include <QMatrix4x4>
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -246,6 +247,11 @@ private slots:
     void seamFinderSewsWaistband();
     void seamFinderSewsCollar();
     void workspaceSetupFile();
+    void arrangementAdjusts();
+    void arrangementGuessesFromShape();
+    void piecesSpreadAndYokes();
+    void piecesNudged();
+    void viewportPicksOverlay();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -1383,6 +1389,13 @@ void TST_Seamly3D::arrangementGuess_data()
     QTest::newRow("waistband") << "Skirt waistband" << static_cast<int>(PiecePlacement::Waistband);
     QTest::newRow("german waistband") << "Bund" << static_cast<int>(PiecePlacement::Waistband);
     QTest::newRow("unknown") << "Piece 7" << static_cast<int>(PiecePlacement::Aside);
+    QTest::newRow("outside is not a side") << "Front outside panel" << static_cast<int>(PiecePlacement::Front);
+    QTest::newRow("inside is not a side") << "Front inside panel" << static_cast<int>(PiecePlacement::Front);
+    QTest::newRow("side panel") << "Side panel" << static_cast<int>(PiecePlacement::LeftSide);
+    QTest::newRow("top sleeve") << "Topsleeve" << static_cast<int>(PiecePlacement::LeftSleeve);
+    QTest::newRow("back yoke") << "Back yoke" << static_cast<int>(PiecePlacement::Back);
+    QTest::newRow("front yoke") << "Front yoke" << static_cast<int>(PiecePlacement::Front);
+    QTest::newRow("yoke") << "Yoke" << static_cast<int>(PiecePlacement::Back);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2243,6 +2256,193 @@ void TST_Seamly3D::seamFinderSewsCollar()
         QVERIFY(a.shape.bounds().center().x() * b.shape.bounds().center().x() > 0); // same side
     }
     QCOMPARE(collarParts, 4);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementAdjusts()
+{
+    const PatternPiece front = tshirtBody(1, QStringLiteral("Front"), 8);
+    const Mesh flat = PieceMesher::mesh(front.seamLine, 2.5);
+    const QRectF bounds = front.seamLine.boundingRect();
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+    const QVector<Mesh> plain = PieceArrangement::place(flat, bounds, PiecePlacement::Front, true, false, frame);
+    QCOMPARE(plain.size(), 2);
+
+    // Up: every point, by as much.
+    PieceAdjustment up;
+    up.lift = 5;
+    const QVector<Mesh> lifted = PieceArrangement::place(flat, bounds, PiecePlacement::Front, true, false, frame, 0, up);
+    for (int c = 0; c < 2; ++c)
+    {
+        for (int v = 0; v < flat.positions.size(); ++v)
+        {
+            QVERIFY((lifted.at(c).positions.at(v) - plain.at(c).positions.at(v) - QVector3D(0, 5, 0)).length() < 1e-3f);
+        }
+    }
+
+    // Around the body: the piece turns about the vertical axis, its mirrored copy the other way, still its mirror.
+    PieceAdjustment around;
+    around.around = 30;
+    const QVector<Mesh> turned =
+        PieceArrangement::place(flat, bounds, PiecePlacement::Front, true, false, frame, 0, around);
+    QMatrix4x4 rotation;
+    rotation.rotate(30, QVector3D(0, 1, 0));
+    for (int v = 0; v < flat.positions.size(); ++v)
+    {
+        QVERIFY((turned.at(0).positions.at(v) - rotation.map(plain.at(0).positions.at(v))).length() < 1e-3f);
+        const QVector3D a = turned.at(0).positions.at(v);
+        const QVector3D b = turned.at(1).positions.at(v);
+        QVERIFY((QVector3D(-a.x(), a.y(), a.z()) - b).length() < 1e-3f);
+    }
+
+    // Turned a quarter: drawn sideways, it is placed as tall as it was wide.
+    PieceAdjustment quarter;
+    quarter.turn = 90;
+    const QVector<Mesh> spun =
+        PieceArrangement::place(flat, bounds, PiecePlacement::Aside, false, false, frame, 0, quarter);
+    const Bounds3D spunBounds = spun.at(0).bounds();
+    QVERIFY(qAbs(spunBounds.size().y() - static_cast<float>(bounds.width())) < 0.01f);
+
+    // A sleeve goes up along the arm, toward the shoulder.
+    const PatternPiece sleeve = tshirtSleeve(3);
+    const Mesh sleeveFlat = PieceMesher::mesh(sleeve.seamLine, 2.5);
+    const QRectF sleeveBounds = sleeve.seamLine.boundingRect();
+    const QVector<Mesh> onArm =
+        PieceArrangement::place(sleeveFlat, sleeveBounds, PiecePlacement::LeftSleeve, true, false, frame);
+    const QVector<Mesh> upArm =
+        PieceArrangement::place(sleeveFlat, sleeveBounds, PiecePlacement::LeftSleeve, true, false, frame, 0, up);
+    QVector3D origin;
+    QVector3D axis;
+    PieceArrangement::axis(PiecePlacement::LeftSleeve, frame, 1, &origin, &axis);
+    QVERIFY(axis.y() > 0 && axis.x() < 0); // up the arm, toward the body
+    const QVector3D moved = upArm.at(0).positions.at(0) - onArm.at(0).positions.at(0);
+    QVERIFY((moved - axis * 5).length() < 1e-3f);
+    const QVector3D movedRight = upArm.at(1).positions.at(0) - onArm.at(1).positions.at(0);
+    QVERIFY(qAbs(movedRight.x() + moved.x()) < 1e-3f && qAbs(movedRight.y() - moved.y()) < 1e-3f);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementGuessesFromShape()
+{
+    const auto rectangle = [](double width, double height)
+    {
+        QPolygonF outline;
+        outline << QPointF(0, 0) << QPointF(width, 0) << QPointF(width, height) << QPointF(0, height);
+        return outline;
+    };
+    QCOMPARE(PieceArrangement::guessFromShape(rectangle(15, 17)), PiecePlacement::Aside);     // a pocket
+    QCOMPARE(PieceArrangement::guessFromShape(rectangle(56, 10)), PiecePlacement::Waistband); // a waistband
+    QCOMPARE(PieceArrangement::guessFromShape(rectangle(26, 8)), PiecePlacement::Collar);     // a collar
+    QCOMPARE(PieceArrangement::guessFromShape(rectangle(8.5, 65)), PiecePlacement::Aside);    // a facing
+    QCOMPARE(PieceArrangement::guessFromShape(rectangle(30, 16)), PiecePlacement::Aside);     // a yoke
+    QCOMPARE(PieceArrangement::guessFromShape(tshirtSleeve(1).seamLine), PiecePlacement::LeftSleeve);
+    QCOMPARE(PieceArrangement::guessFromShape(trouserPiece(1, QString(), false).seamLine),
+             PiecePlacement::LeftLegFront);
+    QCOMPARE(PieceArrangement::guessFromShape(tshirtBody(1, QString(), 8).seamLine), PiecePlacement::Front);
+    QCOMPARE(PieceArrangement::guessFromShape(QPolygonF()), PiecePlacement::Aside);
+
+    // A name that says nothing goes by the shape; one that does, by the name.
+    QCOMPARE(PieceArrangement::guess(QStringLiteral("Piece 2"), tshirtSleeve(1).seamLine), PiecePlacement::LeftSleeve);
+    QCOMPARE(PieceArrangement::guess(QStringLiteral("Back"), tshirtSleeve(1).seamLine), PiecePlacement::Back);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::piecesSpreadAndYokes()
+{
+    // Two half fronts side by side (a princess front), and a yoke on top of the back.
+    PatternPiece centre = tshirtBody(1, QStringLiteral("Front panel"), 8);
+    PatternPiece sidePanel = tshirtBody(2, QStringLiteral("Front side panel"), 8);
+    PatternPiece back = tshirtBody(3, QStringLiteral("Back"), 2);
+    PatternPiece yoke = bandPiece(4, QStringLiteral("Back yoke"), 24, 12, true);
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {centre, sidePanel, back, yoke};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    PatternPiecesPanel::Settings s = piecesPanel.settings(2);
+    s.placement = PiecePlacement::Front;
+    piecesPanel.setSettings(2, s);
+    QCOMPARE(piecesPanel.settings(4).placement, PiecePlacement::Back);
+
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+    const QVector<GarmentPanel> panels = piecesPanel.panels(frame);
+    QCOMPARE(panels.size(), 8);
+
+    // The second front starts round the body where the first one ends.
+    const auto angleOf = [](const QVector3D &p) { return std::atan2(p.x(), p.z()); };
+    float firstEnd = 0;
+    float secondStart = 10;
+    for (const QVector3D &p : panels.at(0).shape.positions)
+    {
+        firstEnd = qMax(firstEnd, angleOf(p));
+    }
+    for (const QVector3D &p : panels.at(2).shape.positions)
+    {
+        secondStart = qMin(secondStart, angleOf(p));
+    }
+    QVERIFY2(qAbs(secondStart - firstEnd) < 0.05f, qPrintable(QStringLiteral("%1 %2").arg(firstEnd).arg(secondStart)));
+    QCOMPARE(piecesPanel.settings(2).adjustment.around, 0.0f); // spread by the arrangement, not moved by hand
+
+    // The back hangs below the yoke, the yoke where the back would be.
+    const float yokeTop = panels.at(6).shape.bounds().maximum.y();
+    const float backTop = panels.at(4).shape.bounds().maximum.y();
+    QVERIFY(qAbs(yokeTop - frame.neckHeight) < 0.5f);
+    QVERIFY2(qAbs(backTop - (frame.neckHeight - 12)) < 0.5f, qPrintable(QString::number(backTop)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::piecesNudged()
+{
+    QTemporaryDir dir;
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtSleeve(2)};
+    provider->m_file = dir.filePath(QStringLiteral("shirt.val"));
+    {
+        PatternPiecesPanel piecesPanel;
+        piecesPanel.setProvider(provider);
+        QSignalSpy arranged(&piecesPanel, &PatternPiecesPanel::arrangementChanged);
+
+        // Dragged on its mirrored copy: the piece turns the other way, so the copy goes where the mouse went.
+        piecesPanel.nudge(2, 1, 10, 3);
+        QCOMPARE(arranged.count(), 1);
+        QCOMPARE(piecesPanel.selectedPiece(), quint32(2));
+        QCOMPARE(piecesPanel.settings(2).adjustment.around, -10.0f);
+        QCOMPARE(piecesPanel.settings(2).adjustment.lift, 3.0f);
+        piecesPanel.nudge(2, 0, 200, 0);
+        QCOMPARE(piecesPanel.settings(2).adjustment.around, -170.0f); // kept within half a turn either way
+
+        // The fields show it, and editing them moves the piece.
+        const QList<QDoubleSpinBox *> spins = piecesPanel.findChildren<QDoubleSpinBox *>();
+        QVERIFY(spins.size() >= 3);
+        QVERIFY(std::any_of(spins.cbegin(), spins.cend(),
+                            [](const QDoubleSpinBox *spin) { return qAbs(spin->value() + 170.0) < 1e-6; }));
+        QVERIFY(piecesPanel.saveSetup());
+    }
+
+    // Kept with the pattern.
+    PatternPiecesPanel again;
+    again.setProvider(provider);
+    QCOMPARE(again.settings(2).adjustment.around, -170.0f);
+    QCOMPARE(again.settings(2).adjustment.lift, 3.0f);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::viewportPicksOverlay()
+{
+    // Two squares facing the camera, one behind the other: the ray hits the nearer one.
+    const auto square = [](float z)
+    {
+        Viewport3D::Overlay overlay;
+        overlay.mesh.positions = {QVector3D(-1, -1, z), QVector3D(1, -1, z), QVector3D(1, 1, z), QVector3D(-1, 1, z)};
+        overlay.mesh.indices = {0, 1, 2, 0, 2, 3};
+        return overlay;
+    };
+    const QVector<Viewport3D::Overlay> overlays = {square(-5), square(2)};
+    float distance = 0;
+    QCOMPARE(Viewport3D::pickOverlay(overlays, QVector3D(0.2f, 0.3f, 10), QVector3D(0, 0, -1), &distance), 1);
+    QVERIFY(qAbs(distance - 8) < 1e-4f);
+    QCOMPARE(Viewport3D::pickOverlay(overlays, QVector3D(0.2f, 0.3f, 0), QVector3D(0, 0, -1), &distance), 0);
+    QCOMPARE(Viewport3D::pickOverlay(overlays, QVector3D(3, 0, 10), QVector3D(0, 0, -1)), -1); // beside them
+    QCOMPARE(Viewport3D::pickOverlay(overlays, QVector3D(0, 0, 10), QVector3D(0, 0, 1)), -1);   // behind the camera
 }
 
 //---------------------------------------------------------------------------------------------------------------------

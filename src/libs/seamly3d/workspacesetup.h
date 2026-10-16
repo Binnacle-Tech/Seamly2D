@@ -61,9 +61,10 @@ struct PieceSetup
 {
     quint32        id{0};
     QString        name{};
-    PiecePlacement placement{PiecePlacement::Aside};
-    bool           pair{false};
-    bool           flip{false};
+    PiecePlacement  placement{PiecePlacement::Aside};
+    bool            pair{false};
+    bool            flip{false};
+    PieceAdjustment adjustment{}; ///< moved by hand
 };
 
 /**

@@ -33,6 +33,7 @@
 #include <memory>
 
 #include "clothsimulator.h"
+#include "garment.h"
 #include "makehuman/makehumanfitter.h"
 #include "parametricbody.h"
 #include "piecearrangement.h"
@@ -92,6 +93,7 @@ private slots:
     void        fabricChanged();
     void        showGarment();
     void        seamsChanged();
+    void        pieceDragged(int index, const QVector3D &point, const QVector3D &delta);
     void        showSeamLines();
 
 private:
@@ -117,6 +119,7 @@ private:
     QComboBox             *m_bodyKindComboBox;
     QTimer                *m_simulationTimer;
     ClothSimulator         m_simulator{};
+    QVector<GarmentPanel>  m_arranged{};   ///< the pieces as arranged, as shown before sewing
     int                    m_settledFrames{0};
 
     BodySource  m_source{BodySource::Parametric};

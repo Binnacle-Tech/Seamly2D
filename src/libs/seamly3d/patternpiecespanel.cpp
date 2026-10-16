@@ -28,6 +28,9 @@
 
 #include <QCheckBox>
 #include <QDir>
+#include <QtMath>
+#include <QHash>
+#include <QDoubleSpinBox>
 #include <QFileInfo>
 #include <QIcon>
 #include <QDialogButtonBox>
@@ -69,12 +72,33 @@ enum Column
 const QColor pieceColors[] = {QColor(96, 140, 196), QColor(214, 120, 96),  QColor(108, 168, 120), QColor(196, 160, 72),
                               QColor(152, 112, 180), QColor(80, 164, 172), QColor(200, 104, 150), QColor(132, 132, 148)};
 
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Places where several pieces go side by side; bands and pieces beside the body do not. */
+bool spreads(PiecePlacement placement)
+{
+    switch (placement)
+    {
+        case PiecePlacement::Waistband:
+        case PiecePlacement::Collar:
+        case PiecePlacement::Aside:
+        case PiecePlacement::Hidden:
+            return false;
+        default:
+            return true;
+    }
+}
+
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
 PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     : QWidget(parent)
     , m_list(new QTreeWidget(this))
+    , m_adjustBox(new QWidget(this))
+    , m_liftSpin(new QDoubleSpinBox(m_adjustBox))
+    , m_aroundSpin(new QDoubleSpinBox(m_adjustBox))
+    , m_turnSpin(new QDoubleSpinBox(m_adjustBox))
+    , m_resetAdjustButton(new QPushButton(tr("Put Back"), m_adjustBox))
     , m_status(new QLabel(this))
     , m_reloadButton(new QPushButton(tr("Reload"), this))
     , m_measurementsButton(new QPushButton(tr("Use Pattern's Measurements"), this))
@@ -137,6 +161,71 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
                 emit arrangementChanged();
             });
     layout->addWidget(m_list, 1);
+
+    // The piece selected in the list, moved by hand (or Ctrl + drag it in 3D).
+    auto *adjust = new QFormLayout(m_adjustBox);
+    adjust->setContentsMargins(0, 0, 0, 0);
+    const QString degrees = QString(QChar(0x00B0));
+    m_liftSpin->setRange(-150, 150);
+    m_liftSpin->setDecimals(1);
+    m_liftSpin->setSuffix(tr(" cm"));
+    m_liftSpin->setToolTip(tr("Move the piece up (or down, below zero): along the arm or the leg for sleeves and "
+                              "trouser legs"));
+    m_aroundSpin->setRange(-180, 180);
+    m_aroundSpin->setDecimals(1);
+    m_aroundSpin->setSingleStep(5);
+    m_aroundSpin->setWrapping(true);
+    m_aroundSpin->setSuffix(degrees);
+    m_aroundSpin->setToolTip(tr("Move the piece around the body (around the arm or the leg for sleeves and trouser "
+                                "legs); its mirrored copy moves the mirrored way"));
+    m_turnSpin->setRange(-180, 180);
+    m_turnSpin->setDecimals(1);
+    m_turnSpin->setSingleStep(15);
+    m_turnSpin->setWrapping(true);
+    m_turnSpin->setSuffix(degrees);
+    m_turnSpin->setToolTip(tr("Turn the piece as it is drawn, before it is placed: for pieces drawn sideways"));
+    m_resetAdjustButton->setToolTip(tr("Back where its place puts it"));
+    adjust->addRow(tr("Up:"), m_liftSpin);
+    adjust->addRow(tr("Around:"), m_aroundSpin);
+    adjust->addRow(tr("Turn:"), m_turnSpin);
+    adjust->addRow(QString(), m_resetAdjustButton);
+    m_adjustBox->setEnabled(false);
+    layout->addWidget(m_adjustBox);
+    const auto adjusted = [this]()
+    {
+        const quint32 id = selectedPiece();
+        if (m_updatingList || id == 0)
+        {
+            return;
+        }
+        Settings s = settings(id);
+        s.adjustment.lift = static_cast<float>(m_liftSpin->value());
+        s.adjustment.around = static_cast<float>(m_aroundSpin->value());
+        s.adjustment.turn = static_cast<float>(m_turnSpin->value());
+        m_settings.insert(id, s);
+        changed();
+        emit arrangementChanged();
+    };
+    for (QDoubleSpinBox *spin : {m_liftSpin, m_aroundSpin, m_turnSpin})
+    {
+        connect(spin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, adjusted);
+    }
+    connect(m_resetAdjustButton, &QPushButton::clicked, this,
+            [this]()
+            {
+                const quint32 id = selectedPiece();
+                if (id == 0)
+                {
+                    return;
+                }
+                Settings s = settings(id);
+                s.adjustment = PieceAdjustment();
+                m_settings.insert(id, s);
+                showAdjustment();
+                changed();
+                emit arrangementChanged();
+            });
+    connect(m_list, &QTreeWidget::currentItemChanged, this, &PatternPiecesPanel::showAdjustment);
 
     m_status->setWordWrap(true);
     layout->addWidget(m_status);
@@ -365,6 +454,7 @@ WorkspaceSetup PatternPiecesPanel::setup() const
         kept.placement = s.placement;
         kept.pair = s.pair;
         kept.flip = s.flip;
+        kept.adjustment = s.adjustment;
         result.pieces.append(kept);
     }
     result.switchedOff = m_switchedOff.values();
@@ -412,6 +502,7 @@ void PatternPiecesPanel::applySetup(const WorkspaceSetup &setup)
             s.placement = kept.placement;
             s.pair = kept.pair;
             s.flip = kept.flip;
+            s.adjustment = kept.adjustment;
             m_settings.insert(id, s);
         }
     }
@@ -505,16 +596,18 @@ void PatternPiecesPanel::setPieces(const QVector<PatternPiece> &pieces)
         if (!m_settings.contains(piece.id))
         {
             Settings s;
-            s.placement = PieceArrangement::guess(piece.name);
+            s.placement = PieceArrangement::guess(piece.name, piece.seamLine);
             s.pair = piece.quantity >= 2 || piece.onFold;
             m_settings.insert(piece.id, s);
         }
     }
 
     rebuildList();
-    m_status->setText(m_pieces.isEmpty() ? tr("The pattern has no pieces in the layout yet.")
-                                         : tr("%n piece(s). Choose where each one starts around the body.", "",
-                                              static_cast<int>(m_pieces.size())));
+    m_status->setText(m_pieces.isEmpty()
+                          ? tr("The pattern has no pieces in the layout yet.")
+                          : tr("%n piece(s). Choose where each one starts around the body; Ctrl + drag a piece in 3D "
+                               "to move it.",
+                               "", static_cast<int>(m_pieces.size())));
     emit arrangementChanged();
 }
 
@@ -542,6 +635,7 @@ void PatternPiecesPanel::setSettings(quint32 id, const Settings &settings)
 //---------------------------------------------------------------------------------------------------------------------
 void PatternPiecesPanel::rebuildList()
 {
+    const quint32 selected = selectedPiece();
     m_updatingList = true;
     m_list->clear();
 
@@ -555,7 +649,7 @@ void PatternPiecesPanel::rebuildList()
         item->setData(NameColumn, Qt::UserRole, piece.id);
         const QColor color = pieceColors[i % (sizeof(pieceColors) / sizeof(pieceColors[0]))];
         item->setData(NameColumn, Qt::DecorationRole, color);
-        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsUserCheckable);
+        item->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsUserCheckable);
         item->setCheckState(PairColumn, s.pair ? Qt::Checked : Qt::Unchecked);
         item->setCheckState(FlipColumn, s.flip ? Qt::Checked : Qt::Unchecked);
 
@@ -576,9 +670,75 @@ void PatternPiecesPanel::rebuildList()
                     emit arrangementChanged();
                 });
         m_list->setItemWidget(item, PlacementColumn, placement);
+        if (piece.id == selected)
+        {
+            m_list->setCurrentItem(item);
+        }
     }
 
     m_updatingList = false;
+    showAdjustment();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::showAdjustment()
+{
+    const quint32 id = selectedPiece();
+    const bool updating = m_updatingList;
+    m_updatingList = true;
+    const PieceAdjustment a = id != 0 ? settings(id).adjustment : PieceAdjustment();
+    m_liftSpin->setValue(static_cast<double>(a.lift));
+    m_aroundSpin->setValue(static_cast<double>(a.around));
+    m_turnSpin->setValue(static_cast<double>(a.turn));
+    m_adjustBox->setEnabled(id != 0);
+    m_updatingList = updating;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+quint32 PatternPiecesPanel::selectedPiece() const
+{
+    const QTreeWidgetItem *item = m_list->currentItem();
+    return item != nullptr ? item->data(NameColumn, Qt::UserRole).toUInt() : 0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::selectPiece(quint32 id)
+{
+    for (int i = 0; i < m_list->topLevelItemCount(); ++i)
+    {
+        QTreeWidgetItem *item = m_list->topLevelItem(i);
+        if (item->data(NameColumn, Qt::UserRole).toUInt() == id)
+        {
+            m_list->setCurrentItem(item);
+            return;
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::nudge(quint32 id, int copy, float around, float lift)
+{
+    if (!m_settings.contains(id))
+    {
+        return;
+    }
+    Settings s = settings(id);
+    float turned = s.adjustment.around + (copy == 0 ? around : -around);
+    while (turned > 180.0f)
+    {
+        turned -= 360.0f;
+    }
+    while (turned < -180.0f)
+    {
+        turned += 360.0f;
+    }
+    s.adjustment.around = turned;
+    s.adjustment.lift = qBound(-150.0f, s.adjustment.lift + lift, 150.0f);
+    m_settings.insert(id, s);
+    selectPiece(id);
+    showAdjustment();
+    changed();
+    emit arrangementChanged();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -666,14 +826,49 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
 {
     QVector<GarmentPanel> result;
     float asideStart = 0;
+    QHash<int, float> taken; // centimeters around each place already taken by the pieces before
+
+    // A yoke goes on top of its place, the other pieces there below it.
+    QHash<int, float> yokes;
+    for (const PatternPiece &piece : m_pieces)
+    {
+        const Settings s = settings(piece.id);
+        if (spreads(s.placement) && PieceArrangement::isYoke(piece.name))
+        {
+            const int place = static_cast<int>(s.placement);
+            yokes[place] = qMax(yokes.value(place), static_cast<float>(piece.seamLine.boundingRect().height()));
+        }
+    }
+
     for (int i = 0; i < m_pieces.size(); ++i)
     {
         const PatternPiece &piece = m_pieces.at(i);
         const Settings s = settings(piece.id);
         const FlatPiece &flat = flatPiece(piece);
 
+        // Several pieces in one place (the panels of a princess bodice, a two-piece sleeve) go side by side around
+        // it, in the order of the list, rather than on top of each other.
+        PieceAdjustment adjustment = s.adjustment;
+        const auto width = static_cast<float>(piece.seamLine.boundingRect().width());
+        const bool yoke = PieceArrangement::isYoke(piece.name);
+        if (spreads(s.placement) && !yoke)
+        {
+            adjustment.lift -= yokes.value(static_cast<int>(s.placement));
+            const int place = static_cast<int>(s.placement);
+            if (taken.contains(place))
+            {
+                const float offset = s.pair ? taken.value(place) : taken.value(place) + width / 2;
+                adjustment.around += qRadiansToDegrees(offset / PieceArrangement::aroundRadius(s.placement, frame));
+                taken[place] += width;
+            }
+            else
+            {
+                taken.insert(place, s.pair ? width : width / 2);
+            }
+        }
+
         const QVector<Mesh> placed = PieceArrangement::place(flat.mesh, piece.seamLine.boundingRect(), s.placement,
-                                                             s.pair, s.flip, frame, asideStart);
+                                                             s.pair, s.flip, frame, asideStart, adjustment);
         if (s.placement == PiecePlacement::Aside)
         {
             // Next piece in the row starts after this one (and its mirrored copy), with a gap.

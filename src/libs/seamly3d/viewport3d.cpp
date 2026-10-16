@@ -32,6 +32,8 @@
 #include <QWheelEvent>
 #include <QtMath>
 
+#include <limits>
+
 #include <cmath>
 
 namespace
@@ -497,6 +499,20 @@ void Viewport3D::mousePressEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->position().toPoint();
 
+    if (m_overlaysMovable && event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier))
+    {
+        QVector3D hit;
+        const int index = overlayAt(event->position(), &hit);
+        if (index >= 0)
+        {
+            m_dragMode = DragMode::Overlay;
+            m_dragOverlay = index;
+            m_dragPoint = hit;
+            emit overlayPressed(index);
+            event->accept();
+            return;
+        }
+    }
     if (event->button() == Qt::LeftButton && !(event->modifiers() & Qt::ShiftModifier))
     {
         m_dragMode = DragMode::Orbit;
@@ -530,6 +546,24 @@ void Viewport3D::mouseMoveEvent(QMouseEvent *event)
                 update();
             }
             break;
+        case DragMode::Overlay:
+            if (height() > 0)
+            {
+                // The mouse moved this far on the plane facing the camera through the point held.
+                const QVector3D eye = m_camera.eye();
+                const QVector3D forward = (m_camera.target() - eye).normalized();
+                QVector3D right = QVector3D::crossProduct(forward, QVector3D(0, 1, 0));
+                right = right.lengthSquared() > 1e-8f ? right.normalized() : QVector3D(1, 0, 0);
+                const QVector3D up = QVector3D::crossProduct(right, forward).normalized();
+                const float depth = QVector3D::dotProduct(m_dragPoint - eye, forward);
+                const float perPixel = 2.0f * depth * qTan(qDegreesToRadians(m_camera.fieldOfView()) / 2)
+                                       / static_cast<float>(height());
+                const QVector3D moved = (right * static_cast<float>(delta.x())
+                                         - up * static_cast<float>(delta.y())) * perPixel;
+                emit overlayDragged(m_dragOverlay, m_dragPoint, moved);
+                m_dragPoint += moved;
+            }
+            break;
         case DragMode::None:
         default:
             break;
@@ -541,7 +575,98 @@ void Viewport3D::mouseMoveEvent(QMouseEvent *event)
 void Viewport3D::mouseReleaseEvent(QMouseEvent *event)
 {
     m_dragMode = DragMode::None;
+    m_dragOverlay = -1;
     event->accept();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Viewport3D::setOverlaysMovable(bool movable)
+{
+    m_overlaysMovable = movable;
+    if (!movable && m_dragMode == DragMode::Overlay)
+    {
+        m_dragMode = DragMode::None;
+        m_dragOverlay = -1;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool Viewport3D::overlaysMovable() const
+{
+    return m_overlaysMovable;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+int Viewport3D::overlayAt(const QPointF &position, QVector3D *hit) const
+{
+    if (width() <= 0 || height() <= 0)
+    {
+        return -1;
+    }
+    // From the point on the screen, straight into the scene.
+    const float aspect = static_cast<float>(width()) / static_cast<float>(height());
+    const QMatrix4x4 inverse = (m_camera.projectionMatrix(aspect) * m_camera.viewMatrix()).inverted();
+    const auto x = static_cast<float>(2.0 * position.x() / width() - 1.0);
+    const auto y = static_cast<float>(1.0 - 2.0 * position.y() / height());
+    const QVector3D near = inverse.map(QVector3D(x, y, -1));
+    const QVector3D far = inverse.map(QVector3D(x, y, 1));
+    const QVector3D direction = (far - near).normalized();
+    float distance = 0;
+    const int index = pickOverlay(m_overlays, near, direction, &distance);
+    if (index >= 0 && hit != nullptr)
+    {
+        *hit = near + direction * distance;
+    }
+    return index;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+int Viewport3D::pickOverlay(const QVector<Overlay> &overlays, const QVector3D &origin, const QVector3D &direction,
+                            float *distance)
+{
+    int nearest = -1;
+    float best = std::numeric_limits<float>::max();
+    for (int o = 0; o < overlays.size(); ++o)
+    {
+        const Mesh &mesh = overlays.at(o).mesh;
+        for (int t = 0; t + 2 < mesh.indices.size(); t += 3)
+        {
+            // Moller-Trumbore, both sides of the triangle.
+            const QVector3D &a = mesh.positions.at(static_cast<int>(mesh.indices.at(t)));
+            const QVector3D ab = mesh.positions.at(static_cast<int>(mesh.indices.at(t + 1))) - a;
+            const QVector3D ac = mesh.positions.at(static_cast<int>(mesh.indices.at(t + 2))) - a;
+            const QVector3D p = QVector3D::crossProduct(direction, ac);
+            const float determinant = QVector3D::dotProduct(ab, p);
+            if (qAbs(determinant) < 1e-9f)
+            {
+                continue;
+            }
+            const float inverse = 1.0f / determinant;
+            const QVector3D s = origin - a;
+            const float u = QVector3D::dotProduct(s, p) * inverse;
+            if (u < 0 || u > 1)
+            {
+                continue;
+            }
+            const QVector3D q = QVector3D::crossProduct(s, ab);
+            const float v = QVector3D::dotProduct(direction, q) * inverse;
+            if (v < 0 || u + v > 1)
+            {
+                continue;
+            }
+            const float along = QVector3D::dotProduct(ac, q) * inverse;
+            if (along > 0 && along < best)
+            {
+                best = along;
+                nearest = o;
+            }
+        }
+    }
+    if (nearest >= 0 && distance != nullptr)
+    {
+        *distance = best;
+    }
+    return nearest;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

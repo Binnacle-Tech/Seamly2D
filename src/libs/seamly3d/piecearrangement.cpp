@@ -26,6 +26,8 @@
 
 #include "piecearrangement.h"
 
+#include <QMatrix4x4>
+#include <QRegularExpression>
 #include <QtMath>
 
 #include <functional>
@@ -405,16 +407,33 @@ BodyFrame BodyFrame::withArm(const QVector3D &shoulder, const QVector3D &wrist) 
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-PiecePlacement PieceArrangement::guess(const QString &name)
+PiecePlacement PieceArrangement::guess(const QString &name, const QPolygonF &outline)
 {
     const QString n = name.toLower();
-    const auto has = [&n](std::initializer_list<const char *> words)
+    // Long keywords anywhere ("Topsleeve"); short ones at the start of a word, so "outside" is not a side and
+    // German compounds ("Seitenteil") still count.
+    static const QRegularExpression separator(QStringLiteral("[^\\w]+"),
+                                              QRegularExpression::UseUnicodePropertiesOption);
+    const QStringList words = n.split(separator, Qt::SkipEmptyParts);
+    const auto has = [&n, &words](std::initializer_list<const char *> keywords)
     {
-        for (const char *word : words)
+        for (const char *keyword : keywords)
         {
-            if (n.contains(QString::fromUtf8(word)))
+            const QString k = QString::fromUtf8(keyword);
+            if (k.size() >= 5 || k.contains(QLatin1Char(' ')))
             {
-                return true;
+                if (n.contains(k))
+                {
+                    return true;
+                }
+                continue;
+            }
+            for (const QString &word : words)
+            {
+                if (word.startsWith(k))
+                {
+                    return true;
+                }
             }
         }
         return false;
@@ -429,12 +448,17 @@ PiecePlacement PieceArrangement::guess(const QString &name)
     {
         return PiecePlacement::Waistband;
     }
-    if (has({"collar", "neckband", "neck band", "kragen", "col ", "cuello", "kraag", "colletto"})
-        || n == QLatin1String("col"))
+    if (has({"collar", "neckband", "neck band", "kragen", "col", "cuello", "kraag", "colletto"}))
     {
         return PiecePlacement::Collar;
     }
-    if (has({"pocket", "cuff", "facing", "band", "belt", "yoke", "tasche", "poche", "bolsillo", "zak"}))
+    if (isYoke(name))
+    {
+        // On top of the front or the back (most yokes are at the back).
+        return has({"front", "vorder", "devant", "delantero", "voor", "davanti"}) ? PiecePlacement::Front
+                                                                                 : PiecePlacement::Back;
+    }
+    if (has({"pocket", "cuff", "facing", "band", "belt", "tasche", "poche", "bolsillo", "zak"}))
     {
         return PiecePlacement::Aside;
     }
@@ -459,7 +483,90 @@ PiecePlacement PieceArrangement::guess(const QString &name)
     {
         return PiecePlacement::Front;
     }
-    return PiecePlacement::Aside;
+    return outline.size() >= 3 ? guessFromShape(outline) : PiecePlacement::Aside;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool PieceArrangement::isYoke(const QString &name)
+{
+    const QString n = name.toLower();
+    for (const char *word : {"yoke", "passe", "sattel", "canes", "carré", "spalla"})
+    {
+        if (n.contains(QString::fromUtf8(word)))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+PiecePlacement PieceArrangement::guessFromShape(const QPolygonF &outline)
+{
+    const QRectF bounds = outline.boundingRect();
+    const double width = bounds.width();
+    const double height = bounds.height();
+    if (outline.size() < 3 || qMax(width, height) < 22.0)
+    {
+        return PiecePlacement::Aside; // pockets, flaps, cuffs, tabs
+    }
+    if (width >= 3.0 * height && height <= 15.0)
+    {
+        return width >= 50.0 ? PiecePlacement::Waistband : PiecePlacement::Collar;
+    }
+    if (height >= 5.0 * width)
+    {
+        return PiecePlacement::Aside; // facings, plackets, ties
+    }
+
+    // A sleeve cap: a dome, highest in the middle, much narrower near its top than the sleeve is wide, and the
+    // sleeve no wider at the hem. (A two-piece sleeve's cap is lopsided: that takes its name.)
+    const auto widthAt = [&outline](double y)
+    {
+        double left = std::numeric_limits<double>::max();
+        double right = std::numeric_limits<double>::lowest();
+        for (int i = 0; i < outline.size(); ++i)
+        {
+            const QPointF a = outline.at(i);
+            const QPointF b = outline.at((i + 1) % outline.size());
+            if ((a.y() - y) * (b.y() - y) <= 0 && !qFuzzyCompare(a.y(), b.y()))
+            {
+                const double x = a.x() + (b.x() - a.x()) * (y - a.y()) / (b.y() - a.y());
+                left = qMin(left, x);
+                right = qMax(right, x);
+            }
+        }
+        return right > left ? right - left : 0.0;
+    };
+    int top = 0;
+    for (int i = 1; i < outline.size(); ++i)
+    {
+        if (outline.at(i).y() < outline.at(top).y())
+        {
+            top = i;
+        }
+    }
+    double widest = 0;
+    for (int step = 1; step < 20; ++step)
+    {
+        widest = qMax(widest, widthAt(bounds.top() + height * step / 20.0));
+    }
+    const double crown = qAbs(outline.at(top).x() - bounds.center().x()) / width;
+    const double cap = widthAt(bounds.top() + height * 0.08);
+    const double hem = widthAt(bounds.top() + height * 0.95);
+    if (height >= 15.0 && crown < 0.15 && cap < 0.6 * widest && hem <= widest)
+    {
+        return PiecePlacement::LeftSleeve;
+    }
+    if (height < 25.0 && qMax(width, height) < 35.0)
+    {
+        return PiecePlacement::Aside; // yokes, pocket bags
+    }
+    if (height >= 80.0)
+    {
+        return PiecePlacement::LeftLegFront;
+    }
+    return PiecePlacement::Front;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -545,7 +652,130 @@ PiecePlacement PieceArrangement::placementFromId(const QString &id, bool *known)
 
 //---------------------------------------------------------------------------------------------------------------------
 QVector<Mesh> PieceArrangement::place(const Mesh &flat, const QRectF &bounds, PiecePlacement placement, bool pair,
-                                      bool flip, const BodyFrame &frame, float asideStart)
+                                      bool flip, const BodyFrame &frame, float asideStart,
+                                      const PieceAdjustment &adjustment)
+{
+    if (adjustment.isNull())
+    {
+        return placeAsDrawn(flat, bounds, placement, pair, flip, frame, asideStart);
+    }
+
+    // Turned: the piece spun about its middle, as if drawn that way.
+    Mesh turned = flat;
+    QRectF turnedBounds = bounds;
+    if (!qFuzzyIsNull(adjustment.turn))
+    {
+        const QPointF middle = bounds.center();
+        const double angle = qDegreesToRadians(static_cast<double>(adjustment.turn));
+        const auto c = static_cast<float>(std::cos(angle));
+        const auto s = static_cast<float>(std::sin(angle));
+        // Pattern Y points down: counterclockwise as drawn is clockwise in these coordinates.
+        float minX = std::numeric_limits<float>::max();
+        float minY = std::numeric_limits<float>::max();
+        float maxX = std::numeric_limits<float>::lowest();
+        float maxY = std::numeric_limits<float>::lowest();
+        for (QVector3D &p : turned.positions)
+        {
+            const float x = p.x() - static_cast<float>(middle.x());
+            const float y = p.y() - static_cast<float>(middle.y());
+            p.setX(static_cast<float>(middle.x()) + x * c + y * s);
+            p.setY(static_cast<float>(middle.y()) - x * s + y * c);
+            minX = qMin(minX, p.x());
+            maxX = qMax(maxX, p.x());
+            minY = qMin(minY, p.y());
+            maxY = qMax(maxY, p.y());
+        }
+        turnedBounds = QRectF(QPointF(minX, minY), QPointF(maxX, maxY));
+    }
+    QVector<Mesh> result = placeAsDrawn(turned, turnedBounds, placement, pair, flip, frame, asideStart);
+
+    // Then along and about the axis of its place; the mirrored copy the mirrored way.
+    for (int copy = 0; copy < result.size(); ++copy)
+    {
+        Mesh &mesh = result[copy];
+        QVector3D middle;
+        for (const QVector3D &p : qAsConst(mesh.positions))
+        {
+            middle += p;
+        }
+        middle /= static_cast<float>(qMax(1, static_cast<int>(mesh.positions.size())));
+        QVector3D origin;
+        QVector3D up;
+        axis(placement, frame, middle.x() < 0 ? -1.0f : 1.0f, &origin, &up);
+        const bool turnsAround = placement != PiecePlacement::Aside && placement != PiecePlacement::Hidden;
+        // The mirror image of a turn about one limb is the opposite turn about the other.
+        const float degrees = turnsAround ? (copy == 0 ? adjustment.around : -adjustment.around) : 0.0f;
+        QMatrix4x4 rotation;
+        rotation.rotate(degrees, up);
+        for (QVector3D &p : mesh.positions)
+        {
+            p = origin + rotation.map(p - origin) + up * adjustment.lift;
+        }
+        mesh.computeNormals();
+    }
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PieceArrangement::axis(PiecePlacement placement, const BodyFrame &frame, float side, QVector3D *origin,
+                            QVector3D *up)
+{
+    const auto mirrored = [side](const QVector3D &p) { return QVector3D(side * p.x(), p.y(), p.z()); };
+    *origin = QVector3D(0, 0, 0);
+    *up = QVector3D(0, 1, 0);
+    switch (placement)
+    {
+        case PiecePlacement::LeftSleeve:
+        case PiecePlacement::RightSleeve:
+            *origin = mirrored(frame.leftShoulder);
+            *up = (*origin - mirrored(frame.leftWrist)).normalized();
+            break;
+        case PiecePlacement::LeftLegFront:
+        case PiecePlacement::LeftLegBack:
+        case PiecePlacement::RightLegFront:
+        case PiecePlacement::RightLegBack:
+            *origin = mirrored(frame.leftHip);
+            *up = (*origin - mirrored(frame.leftKnee)).normalized();
+            break;
+        case PiecePlacement::Waistband:
+            *origin = frame.waistCenter;
+            break;
+        case PiecePlacement::Collar:
+            *origin = frame.neckCenter;
+            break;
+        default:
+            break;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+float PieceArrangement::aroundRadius(PiecePlacement placement, const BodyFrame &frame)
+{
+    switch (placement)
+    {
+        case PiecePlacement::LeftSleeve:
+        case PiecePlacement::RightSleeve:
+            return frame.sleeveRadius;
+        case PiecePlacement::LeftLegFront:
+        case PiecePlacement::LeftLegBack:
+        case PiecePlacement::RightLegFront:
+        case PiecePlacement::RightLegBack:
+            return frame.thighRadius + 2.5f;
+        case PiecePlacement::LowerFront:
+        case PiecePlacement::LowerBack:
+            return frame.hipRadius;
+        case PiecePlacement::Waistband:
+            return frame.waistRadius + 1.0f;
+        case PiecePlacement::Collar:
+            return frame.neckRadius + 1.0f;
+        default:
+            return frame.torsoRadius;
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<Mesh> PieceArrangement::placeAsDrawn(const Mesh &flat, const QRectF &bounds, PiecePlacement placement,
+                                             bool pair, bool flip, const BodyFrame &frame, float asideStart)
 {
     QVector<Mesh> result;
     if (flat.isEmpty() || placement == PiecePlacement::Hidden)

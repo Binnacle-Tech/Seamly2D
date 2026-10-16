@@ -44,10 +44,10 @@ context on Windows, macOS and Linux.
 | `ObjMeshReader` / `ObjMeshWriter` | Wavefront OBJ import of scanned or modeled bodies, and export of the generated body. |
 | `PolygonTriangulator` | Ear-clipping triangulation of 2D piece outlines, plus flat piece meshes. |
 | `OrbitCamera` | Y-up turntable camera: orbit, pan, zoom, frame bounds. |
-| `Viewport3D` | `QOpenGLWidget` that draws the shaded body, the pieces or the draped garment (colored per piece or by a fit map), seam lines and a ground grid. Left drag orbits, Shift/right/middle drag pans, the wheel zooms. |
+| `Viewport3D` | `QOpenGLWidget` that draws the shaded body, the pieces or the draped garment (colored per piece or by a fit map), seam lines and a ground grid. Left drag orbits, Shift/right/middle drag pans, the wheel zooms, Ctrl + drag moves a piece (picked by casting a ray). |
 | `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body, and runs the sewing and draping. |
 | `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
-| `PieceMesher`, `PieceArrangement`, `BodyFrame`, `PatternPiecesPanel` | Pieces turned into meshes and placed around the body (torso, arms, legs, waist, neck), and the panel to arrange them, edit the seams and choose the fabric and fit map. |
+| `PieceMesher`, `PieceArrangement`, `BodyFrame`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body (torso, arms, legs, waist, neck) by name or by shape, and moved by hand (`PieceAdjustment`); the panel to arrange them, edit the seams and choose the fabric and fit map. |
 | `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (the piece's sides), and the seams found between those edges: one to one, sleeve caps into armholes, waistbands and collars along waistlines and necklines. |
 | `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric. Gives the stretch and ease of the draped garment. |
 | `FitMap` | Colors for the fit maps and their legend. |
@@ -161,8 +161,32 @@ and draping:
   waist and the neck are found on the body shown. A band drawn upright in
   the pattern is turned, its left side on top.
 * Where a piece goes is guessed from its name (front, back, sleeve, skirt,
-  trouser, pants, waistband, collar..., also in German, French, Spanish,
-  Dutch and Italian). You can change it per piece, or hide the piece.
+  trouser, pants, waistband, collar, yoke..., also in German, French,
+  Spanish, Dutch and Italian). Short words count at the start of a word, so
+  "Front outside panel" is a front, not a side, and "Seitenteil" is a side;
+  longer ones anywhere ("Topsleeve"). You can change it per piece, or hide
+  the piece.
+* **Pieces without a name** that says anything ("Piece 7", from a DXF file
+  without names) are guessed from their shape: small pieces (pockets, flaps,
+  cuffs, yokes) and long upright strips (facings) beside the body, long flat
+  strips as waistbands (50 cm and more) or collars, pieces with a domed top
+  in the middle as sleeves, pieces 80 cm long and more as trouser legs, the
+  rest on the front. Two-piece sleeves have a lopsided cap and are not told
+  from body panels by shape; front from back is not guessed either.
+* **Several pieces in one place** (the panels of a princess bodice, a
+  two-piece sleeve) go side by side around it in the order of the list,
+  rather than on top of each other. A **yoke** goes on top of the front or
+  back, and the other pieces there hang below it.
+* **Moving a piece by hand:** select it in the list and set **Up** (cm),
+  **Around** (degrees) and **Turn** (degrees), or hold **Ctrl** and drag it
+  in 3D (Ctrl + click selects it). Up and around are along and about the
+  axis of its place: the body's for the torso, skirts and bands, the arm's
+  for sleeves, the leg's for trouser legs. Dragging along that axis on the
+  screen moves the piece along it; dragging across turns it around. Turn
+  spins the flat piece as drawn, for pieces drawn sideways. The mirrored
+  copy moves the mirrored way, so pairs stay symmetric. **Put Back** returns
+  the piece to where its place puts it. Pieces move until the garment is
+  sewn; **Reset** to move them again.
 * **Pair:** a piece cut twice or on the fold gets a mirrored copy, on the
   other side of the center line, on the other arm or on the other leg.
   **Flip** mirrors the piece when its center line (or, for a trouser leg,
@@ -247,8 +271,9 @@ named after it: `shirt.val` gets `shirt.seamly3d`. The pattern file and its
 format do not change, so the pattern still opens in any Seamly2D. The file
 keeps:
 
-* where each piece goes, and its **Pair** and **Flip** boxes (a piece is
-  found again by its id, or by its name if the pattern was rebuilt);
+* where each piece goes, its **Pair** and **Flip** boxes, and how far it was
+  moved by hand (a piece is found again by its id, or by its name if the
+  pattern was rebuilt);
 * the seams you switched off and the ones you added;
 * the fabric and the fit map.
 
@@ -268,11 +293,14 @@ It is JSON, so it can be read and kept in version control with the pattern:
     "format": "seamly3d-setup",
     "pieces": [
         {
+            "around": -10,
             "flip": true,
             "id": 42,
+            "lift": 2.5,
             "name": "Sleeve",
             "pair": true,
-            "placement": "right-sleeve"
+            "placement": "right-sleeve",
+            "turn": 0
         }
     ],
     "seams": {
@@ -300,7 +328,8 @@ It is JSON, so it can be read and kept in version control with the pattern:
 Placements are named (`front`, `back`, `left-side`, `right-side`,
 `left-sleeve`, `right-sleeve`, `lower-front`, `lower-back`,
 `left-leg-front`, `left-leg-back`, `right-leg-front`, `right-leg-back`,
-`waistband`, `collar`, `aside`, `hidden`), and a seam left open is named
+`waistband`, `collar`, `aside`, `hidden`), a piece moved by hand has
+`lift` (cm), `around` and `turn` (degrees), and a seam left open is named
 `pieceA:copyA:edgeA-pieceB:copyB:edgeB@startA`, edges counted from 0. A
 file from a newer version is read as far as it is understood.
 
@@ -388,16 +417,16 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 
 In order, because each one unblocks real patterns rather than test ones:
 
-1. **Arrange real patterns:** move and turn pieces in 3D, and guess where
-   unnamed pieces go from their shape (imported patterns like FreeSewing's
-   Devon have no names, so every piece is hung beside the body), so
-   many-piece garments do not overlap.
-2. **Sew real patterns:** pick seam edges in 3D or on the 2D pieces, sew
-   part of an edge between notches, and use notches to line seams up.
-3. **Fabric grain:** stretch that differs along the warp, the weft and the
+1. **Sew real patterns:** pick seam edges in 3D or on the 2D pieces, sew
+   part of an edge between notches, and use notches to line seams up. A
+   yoke sewn to several panels, and an under collar to its upper collar,
+   need this (FreeSewing's Devon jacket drapes badly without it).
+2. **Fabric grain:** stretch that differs along the warp, the weft and the
    bias, from the grainline, and a fabric per piece.
-4. **Self collision**, which layered garments, fold-over collars and
+3. **Self collision**, which layered garments, fold-over collars and
    tucked-in shirts need.
+4. **Arrange from the pattern itself:** use grainlines and notches to tell
+   which way a piece goes, two-piece sleeves and front from back by shape.
 
 ### 1. Avatar
 
@@ -425,13 +454,17 @@ In order, because each one unblocks real patterns rather than test ones:
   fold
 - [x] Import DXF and SVG patterns from other CAD systems and pattern sites
   as parametric Seamly2D patterns
-- [ ] Move, turn and bend pieces in 3D (arrangement points, as in CLO)
+- [x] Move pieces by hand: up, around and turn, in the panel or with
+  Ctrl + drag in 3D; kept in the setup file
+- [x] Guess placements from shape for pieces without a name; several pieces
+  in one place side by side; yokes on top
+- [ ] Bend pieces in 3D, and arrangement points to snap them to (as in CLO)
 - [ ] Use grainlines and notches for orientation: which way is up, which
   edge is the center line or the side seam (now guessed from the shape,
-  with **Flip** to correct it)
-- [ ] Guess placements from shape for pieces without a name
+  with **Flip** and **Turn** to correct it)
+- [ ] Tell two-piece sleeves, and fronts from backs, by shape
 - [ ] Bands drawn upright in the pattern: tell their top from their bottom
-- [ ] Place cuffs (round the wrist), pockets, facings and yokes
+- [ ] Place cuffs (round the wrist), pockets and facings
 - [ ] Several garments at once, in layers (a shirt under trousers)
 
 ### 3. Sewing
@@ -444,6 +477,8 @@ In order, because each one unblocks real patterns rather than test ones:
 - [ ] Pick seam edges in 3D or on the 2D pieces
 - [ ] Sew part of an edge (between notches or points), and line seams up
   by their notches
+- [ ] One edge sewn to several (a yoke to the panels below it), and an
+  under collar to its upper collar
 - [ ] Gathers and ease: sew a longer edge into a shorter one on purpose
 - [ ] Cuffs, pockets and facings sewn on; collars that fold over
 - [ ] Openings and closures: button stands that overlap, flies, zips
@@ -491,8 +526,8 @@ In order, because each one unblocks real patterns rather than test ones:
 
 - [x] The 3D setup (placements, seams, fabric, fit map) kept next to the
   pattern in a `.seamly3d` file, without changing the `.val` format
-- [ ] Keep the arrangement of pieces moved by hand, and the body (which
-  model, build), in the setup too
+- [x] Pieces moved by hand kept in the setup too
+- [ ] The body (which model, build) kept in the setup too
 - [ ] Undo and redo in the 3D workspace
 - [ ] Keep the window layout, the camera and the last fabric between
   sessions
