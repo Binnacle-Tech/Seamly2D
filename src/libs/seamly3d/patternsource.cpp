@@ -27,6 +27,7 @@
 #include "patternsource.h"
 
 #include <QHash>
+#include <QLineF>
 #include <QSharedPointer>
 
 #include "../ifc/xml/vabstractpattern.h"
@@ -35,6 +36,7 @@
 #include "../vpatterndb/floatItemData/vpiecelabeldata.h"
 #include "../vpatterndb/variables/measurement_variable.h"
 #include "../vpatterndb/vcontainer.h"
+#include "../vgeometry/vpointf.h"
 #include "../vpatterndb/vpiece.h"
 
 namespace Seamly3D
@@ -74,6 +76,28 @@ QVector<PatternPiece> PatternSource::pieces(QString *error)
                 // Pattern coordinates are pixels; the 3D workspace works in centimeters.
                 result3D.seamLine.append(QPointF(FromPixel(point.x(), Unit::Cm), FromPixel(point.y(), Unit::Cm)));
             }
+            // The piece's own points (where its seam lines meet) become the corners that split it into edges.
+            for (const VPointF &node : piece.mainPathNodePoints(data))
+            {
+                const QPointF corner(FromPixel(node.x(), Unit::Cm), FromPixel(node.y(), Unit::Cm));
+                int nearest = -1;
+                qreal nearestDistance = 0.05; // centimeters
+                for (int i = 0; i < result3D.seamLine.size(); ++i)
+                {
+                    const qreal distance = QLineF(result3D.seamLine.at(i), corner).length();
+                    if (distance < nearestDistance)
+                    {
+                        nearestDistance = distance;
+                        nearest = i;
+                    }
+                }
+                if (nearest >= 0 && !result3D.corners.contains(nearest))
+                {
+                    result3D.corners.append(nearest);
+                }
+            }
+            std::sort(result3D.corners.begin(), result3D.corners.end());
+
             const VPieceLabelData &label = piece.GetPatternPieceData();
             result3D.quantity = qMax(1, label.GetQuantity());
             result3D.onFold = label.IsOnFold();

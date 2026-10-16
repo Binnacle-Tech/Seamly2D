@@ -37,6 +37,7 @@ namespace
 {
 
 const float clearance = 4.0f;     // centimeters between the body and the pieces wrapped around it
+const float shoulderLift = 4.0f;  // centimeters from the back of the neck up to above the shoulder seams
 const float asideSpacing = 15.0f; // centimeters between pieces hung beside the body
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -82,7 +83,9 @@ BodyFrame BodyFrame::fromMeasurements(const BodyMeasurements &measurements)
     const auto value = [&m](BodyMeasurement measurement) { return static_cast<float>(m.value(measurement)); };
 
     BodyFrame frame;
-    frame.neckHeight = value(BodyMeasurement::NeckBackHeight);
+    // The neck side and the top of the shoulders are above the back of the neck: start the pieces a little higher so
+    // their shoulder seams close over the shoulders, not through them.
+    frame.neckHeight = value(BodyMeasurement::NeckBackHeight) + shoulderLift;
     frame.shoulderHeight = value(BodyMeasurement::ShoulderTipHeight);
     const float girth = qMax(value(BodyMeasurement::BustCirc), value(BodyMeasurement::HipCirc));
     frame.torsoRadius = girth / (2 * static_cast<float>(M_PI)) + clearance;

@@ -47,54 +47,179 @@ Edge edgeOf(quint32 a, quint32 b)
     return a < b ? Edge(a, b) : Edge(b, a);
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+double cross(const QVector3D &a, const QVector3D &b, const QVector3D &c)
+{
+    return static_cast<double>((b.x() - a.x()) * (c.y() - a.y()) - (b.y() - a.y()) * (c.x() - a.x()));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+double angleAt(const QVector3D &apex, const QVector3D &a, const QVector3D &b)
+{
+    const QVector3D u = (a - apex).normalized();
+    const QVector3D v = (b - apex).normalized();
+    return std::acos(qBound(-1.0, static_cast<double>(QVector3D::dotProduct(u, v)), 1.0));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief delaunayFlips flips inner edges until the triangulation is Delaunay (Lawson): of the two ways to split each
+ * pair of triangles, the one with the larger smallest angle. Outline edges, belonging to one triangle, never flip.
+ */
+void delaunayFlips(Mesh &mesh)
+{
+    const int triangleCount = static_cast<int>(mesh.indices.size() / 3);
+    for (int round = 0; round < 64; ++round)
+    {
+        QHash<Edge, QPair<int, int>> triangles; // the one or two triangles of each edge
+        for (int t = 0; t < triangleCount; ++t)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                const Edge edge = edgeOf(mesh.indices.at(3 * t + k), mesh.indices.at(3 * t + (k + 1) % 3));
+                auto it = triangles.find(edge);
+                if (it == triangles.end())
+                {
+                    triangles.insert(edge, qMakePair(t, -1));
+                }
+                else
+                {
+                    it->second = t;
+                }
+            }
+        }
+
+        // Visit the edges triangle by triangle (not in hash order, which changes from run to run).
+        QVector<bool> changed(triangleCount, false);
+        bool flipped = false;
+        for (int corner = 0; corner < 3 * triangleCount; ++corner)
+        {
+            const int t1 = corner / 3;
+            const int k = corner % 3;
+            if (changed.at(t1))
+            {
+                continue;
+            }
+            const auto pair =
+                triangles.value(edgeOf(mesh.indices.at(3 * t1 + k), mesh.indices.at(3 * t1 + (k + 1) % 3)));
+            const int t2 = pair.first == t1 ? pair.second : pair.first;
+            if (t2 < 0 || changed.at(t2))
+            {
+                continue;
+            }
+
+            // t1 = (a, b, c) and t2 = (b, a, d), both wound the same way.
+            const quint32 a = mesh.indices.at(3 * t1 + k);
+            const quint32 b = mesh.indices.at(3 * t1 + (k + 1) % 3);
+            const quint32 c = mesh.indices.at(3 * t1 + (k + 2) % 3);
+            quint32 d = 0;
+            for (int j = 0; j < 3; ++j)
+            {
+                const quint32 v = mesh.indices.at(3 * t2 + j);
+                if (v != a && v != b)
+                {
+                    d = v;
+                }
+            }
+
+            const QVector3D &pa = mesh.positions.at(static_cast<int>(a));
+            const QVector3D &pb = mesh.positions.at(static_cast<int>(b));
+            const QVector3D &pc = mesh.positions.at(static_cast<int>(c));
+            const QVector3D &pd = mesh.positions.at(static_cast<int>(d));
+            if (angleAt(pc, pa, pb) + angleAt(pd, pa, pb) <= M_PI + 1e-9)
+            {
+                continue; // already Delaunay
+            }
+            // The new triangles (a, d, c) and (d, b, c) must keep the winding: the pair forms a convex quad.
+            const double winding = cross(pa, pb, pc);
+            if (cross(pa, pd, pc) * winding <= 0 || cross(pd, pb, pc) * winding <= 0)
+            {
+                continue;
+            }
+
+            mesh.indices[3 * t1] = a;
+            mesh.indices[3 * t1 + 1] = d;
+            mesh.indices[3 * t1 + 2] = c;
+            mesh.indices[3 * t2] = d;
+            mesh.indices[3 * t2 + 1] = b;
+            mesh.indices[3 * t2 + 2] = c;
+            changed[t1] = true;
+            changed[t2] = true;
+            flipped = true;
+        }
+        if (!flipped)
+        {
+            break;
+        }
+    }
+}
+
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
-QPolygonF PieceMesher::resample(const QPolygonF &outline, double maxEdge)
+QPolygonF PieceMesher::resample(const QPolygonF &outline, double maxEdge, QVector<int> *outlineIndex)
 {
-    QPolygonF points = outline;
-    if (points.size() > 1 && points.constFirst() == points.constLast())
-    {
-        points.removeLast();
-    }
-
-    // Drop repeated points: they make zero length edges the triangulator can not use.
+    // Drop repeated points (and a closing point equal to the first): zero length edges break the triangulation.
     QPolygonF clean;
-    for (const QPointF &point : points)
+    QVector<int> cleanIndex(outline.size(), 0);
+    for (int i = 0; i < outline.size(); ++i)
     {
-        if (clean.isEmpty() || QLineF(clean.constLast(), point).length() > 1e-6)
+        if (clean.isEmpty() || QLineF(clean.constLast(), outline.at(i)).length() > 1e-6)
         {
-            clean.append(point);
+            clean.append(outline.at(i));
         }
+        cleanIndex[i] = static_cast<int>(clean.size()) - 1;
     }
-    if (clean.size() > 1 && QLineF(clean.constFirst(), clean.constLast()).length() <= 1e-6)
+    while (clean.size() > 1 && QLineF(clean.constFirst(), clean.constLast()).length() <= 1e-6)
     {
+        const int last = static_cast<int>(clean.size()) - 1;
         clean.removeLast();
+        for (int &index : cleanIndex)
+        {
+            if (index == last)
+            {
+                index = 0;
+            }
+        }
     }
 
     QPolygonF result;
+    QVector<int> start(clean.size(), 0);
     for (int i = 0; i < clean.size(); ++i)
     {
         const QPointF &a = clean.at(i);
         const QPointF &b = clean.at((i + 1) % clean.size());
         const int parts = qMax(1, qCeil(QLineF(a, b).length() / maxEdge));
+        start[i] = static_cast<int>(result.size());
         for (int k = 0; k < parts; ++k)
         {
             result.append(a + (b - a) * (static_cast<qreal>(k) / parts));
+        }
+    }
+
+    if (outlineIndex != nullptr)
+    {
+        outlineIndex->resize(outline.size());
+        for (int i = 0; i < outline.size(); ++i)
+        {
+            (*outlineIndex)[i] = clean.isEmpty() ? 0 : start.at(cleanIndex.at(i));
         }
     }
     return result;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-Mesh PieceMesher::mesh(const QPolygonF &outline, double maxEdge)
+Mesh PieceMesher::mesh(const QPolygonF &outline, double maxEdge, QVector<int> *outlineVertex)
 {
-    const QPolygonF boundary = resample(outline, maxEdge);
+    // The triangulation keeps the outline points as its first vertices, in order.
+    const QPolygonF boundary = resample(outline, maxEdge, outlineVertex);
     Mesh mesh = PolygonTriangulator::flatPieceMesh(boundary);
     if (mesh.isEmpty())
     {
         return mesh;
     }
+    // Ear clipping leaves long thin triangles; bisecting those would cascade into needlessly tiny ones.
+    delaunayFlips(mesh);
 
     // Longest edge bisection (Rivara): split a triangle's longest edge, and the neighbour sharing it, until no edge
     // is too long. Splitting the longest edge keeps the triangles from getting thinner.
@@ -125,7 +250,7 @@ Mesh PieceMesher::mesh(const QPolygonF &outline, double maxEdge)
             }
 
             const Edge edge = edgeOf(v[longest], v[(longest + 1) % 3]);
-            if (longestLength <= maxEdge && !midpoints.contains(edge))
+            if (longestLength <= maxEdge * (1 + 1e-6) && !midpoints.contains(edge)) // outline edges are never split
             {
                 next << v[0] << v[1] << v[2];
                 continue;
@@ -182,6 +307,7 @@ Mesh PieceMesher::mesh(const QPolygonF &outline, double maxEdge)
         {
             break;
         }
+        delaunayFlips(mesh);
     }
 
     return mesh;

@@ -47,9 +47,10 @@ context on Windows, macOS and Linux.
 | `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body. |
 | `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
 | `PieceMesher`, `PieceArrangement`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body, and the panel to arrange them. |
+| `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (between the piece's own points), and the seams found between those edges. |
+| `ClothSimulator`, `BodyCollider` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
 | `Workspace3DIntegration` | The single hook into the 2D main window. |
-
 | `MakeHumanData`, `MakeHumanBody`, `MakeHumanFitter` (`makehuman/`) | Realistic body: MakeHuman's base mesh and targets, fitted to the measurements. AGPL port, see `makehuman/README.md`. |
 
 Unit tests for everything except the GL widgets are in `src/test/Seamly3DTest`.
@@ -151,6 +152,34 @@ and draping:
 * **Use Pattern's Measurements** fits the body to the measurement file the
   pattern uses.
 
+### Sewing and draping
+
+**Sew & Drape** in the Pattern Pieces tab sews the pieces placed on the body
+together and lets the garment fall onto it. **Reset** goes back to the pieces
+around the body; changing the pieces, their places or the body resets too.
+The status line says how sewing goes; its tooltip lists the seams found.
+
+* **Seams are found automatically.** A piece's edges run between its own
+  points (the points of its main path). Two edges are sewn together when they
+  are as long as each other (within 5%), have the same shape (one bulges where
+  the other curves in, or both are straight), and lie side by side on the same
+  side of the body once arranged: side and shoulder seams, the center line of
+  a piece cut on the fold and its mirrored copy, the underarm seam of a
+  sleeve, darts. A sleeve cap is set into the front and back armholes beside
+  it, with up to 15% ease. Necklines and hems stay open.
+* **Simulation:** position based dynamics (XPBD) in small steps, 15 per frame.
+  The fabric keeps the lengths of the flat piece (it does not stretch) and
+  resists folding softly; seams pull their two edges together at 30 cm/s with
+  gravity off, then gravity drapes the garment. The body pushes the cloth out
+  to 4 mm from its surface, with friction; the floor stops whatever falls.
+  Each particle weighs as much as the fabric around it.
+* It runs a few frames at a time between repaints, so the window stays
+  responsive, and stops by itself once the garment has settled.
+
+Not there yet: collars and waistbands sewn to necklines (pieces hung beside
+the body are not sewn), self collision (cloth folding through itself), fabric
+presets, and editing the seams by hand.
+
 ### How to measure
 
 The **How to measure** box under the measurement fields shows the Seamly2D
@@ -205,14 +234,19 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
      arms, pieces beside the body), pairs for pieces cut twice or on the fold
    - [ ] Drag pieces in 3D; use grainlines and notches for orientation
 3. **Sewing**
-   - [ ] Seams between piece edges (one to one and one to many), drawn on the
-     2D pieces, with notches as alignment hints
+   - [x] Seams found automatically between piece edges: one to one (sides,
+     shoulders, folds, darts, underarms) and sleeve caps into armholes
+   - [ ] Edit seams by hand, drawn on the 2D pieces, with notches as
+     alignment hints; collars and waistbands
 4. **Cloth simulation**
-   - [ ] Remeshing of pieces into an even triangle mesh (particle distance)
-   - [ ] XPBD solver: stretch, shear, bending, seam constraints, gravity
-   - [ ] Collision with the avatar (signed distance field) and self-collision
+   - [x] Even triangle mesh of each piece (Delaunay flips, longest edge
+     bisection)
+   - [x] XPBD solver: stretch, bending, seam constraints, gravity, damping
+   - [x] Collision with the avatar (closest point on a triangle grid) and the
+     floor, with friction
+   - [ ] Self collision; a smoothed collision body for the finest details
    - [ ] Fabric presets (cotton, denim, jersey, silk...) mapped to stiffness,
-     weight and friction
+     weight and friction; multithreaded solver
 5. **Fit analysis**
    - [ ] Strain and stress maps, pressure maps, ease measured with `MeshSlicer`
 6. **2D ↔ 3D sync**

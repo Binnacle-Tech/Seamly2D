@@ -32,8 +32,10 @@
 
 #include <memory>
 
+#include "clothsimulator.h"
 #include "makehuman/makehumanfitter.h"
 #include "parametricbody.h"
+#include "piecearrangement.h"
 
 class QAction;
 class QComboBox;
@@ -84,6 +86,9 @@ private slots:
     void        regenerateBody();
     void        updatePieces();
     void        usePatternMeasurements();
+    void        setSimulationRunning(bool run);
+    void        resetSimulation();
+    void        stepSimulation();
 
 private:
     Q_DISABLE_COPY_MOVE(Workspace3DWindow)
@@ -97,6 +102,7 @@ private:
     void        startFit(bool frame);
     void        showBody(bool frame);
     BodyKind    bodyKind() const;
+    BodyFrame   bodyFrame() const;
 
     Viewport3D            *m_viewport;
     BodyMeasurementsPanel *m_measurementsPanel;
@@ -105,6 +111,9 @@ private:
     QLabel                *m_statusLabel;
     QTimer                *m_regenerateTimer;
     QComboBox             *m_bodyKindComboBox;
+    QTimer                *m_simulationTimer;
+    ClothSimulator         m_simulator{};
+    int                    m_settledFrames{0};
 
     BodySource  m_source{BodySource::Parametric};
     BodyModel   m_body{};          ///< Simple mannequin

@@ -31,7 +31,11 @@
 #include <QVector2D>
 #include <QtTest>
 
+#include <limits>
+
 #include "bodymeasurements.h"
+#include "clothsimulator.h"
+#include "garment.h"
 #include "makehuman/makehumanfitter.h"
 #include "makehuman/makehumanmodel.h"
 #include "mesh.h"
@@ -209,6 +213,15 @@ private slots:
     void piecesPanelFromProvider();
     void makeHumanFitUnreachable();
     void makeHumanGenderChangesShape();
+
+    void garmentPanelEdges();
+    void seamFinderSewsBodice();
+    void seamFinderSewsDart();
+    void seamFinderSetsInSleeves();
+    void bodyColliderInsideOutside();
+    void clothDrapesOverSphere();
+    void clothSewsTube();
+    void clothSewsShirtOnBody();
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1412,6 +1425,433 @@ void TST_Seamly3D::piecesPanelFromProvider()
     panel.reload();
     QCOMPARE(panel.settings(7).placement, PiecePlacement::Hidden);
     QCOMPARE(panel.overlays(frame).size(), 4);
+}
+
+namespace
+{
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief A flat rectangular panel, shape = rest, corners at the four corners. */
+GarmentPanel rectanglePanel(double width, double height)
+{
+    QPolygonF outline;
+    outline << QPointF(0, 0) << QPointF(width, 0) << QPointF(width, height) << QPointF(0, height);
+    GarmentPanel panel;
+    QVector<int> outlineVertex;
+    panel.rest = PieceMesher::mesh(outline, 2.5, &outlineVertex);
+    panel.shape = panel.rest;
+    panel.outlineCount = static_cast<int>(PieceMesher::resample(outline, 2.5).size());
+    panel.corners = outlineVertex;
+    return panel;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Mesh sphereMesh(const QVector3D &center, float radius, int rings = 24, int segments = 48)
+{
+    Mesh mesh;
+    for (int r = 0; r <= rings; ++r)
+    {
+        const double theta = M_PI * r / rings;
+        for (int s = 0; s < segments; ++s)
+        {
+            const double phi = 2 * M_PI * s / segments;
+            mesh.positions.append(center
+                                  + radius * QVector3D(static_cast<float>(std::sin(theta) * std::cos(phi)),
+                                                       static_cast<float>(std::cos(theta)),
+                                                       static_cast<float>(std::sin(theta) * std::sin(phi))));
+        }
+    }
+    for (int r = 0; r < rings; ++r)
+    {
+        for (int s = 0; s < segments; ++s)
+        {
+            const auto a = static_cast<quint32>(r * segments + s);
+            const auto b = static_cast<quint32>(r * segments + (s + 1) % segments);
+            const auto c = static_cast<quint32>((r + 1) * segments + s);
+            const auto d = static_cast<quint32>((r + 1) * segments + (s + 1) % segments);
+            mesh.indices << a << b << c << b << d << c;
+        }
+    }
+    mesh.computeNormals();
+    return mesh;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief The bodice of bodicePiece() with its corners: neck, shoulder, armhole, side, hem, center. */
+PatternPiece bodiceWithCorners(quint32 id, const QString &name)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = name;
+    piece.seamLine = bodicePiece();
+    piece.corners = {0, 1, 2, 11, 12, 13};
+    piece.onFold = true;
+    return piece;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Half of a T-shirt front or back, center line at x = 0, with a concave neckline and armhole. Edges: neck,
+ *  shoulder, armhole, side, hem, center. */
+PatternPiece tshirtBody(quint32 id, const QString &name, double neckDrop)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = name;
+    piece.onFold = true;
+    QPolygonF &outline = piece.seamLine;
+    for (int i = 0; i < 8; ++i)
+    {
+        const double a = M_PI / 2 * i / 8;
+        outline << QPointF(7 * std::sin(a), neckDrop * std::cos(a));
+    }
+    piece.corners << 0 << static_cast<int>(outline.size());
+    outline << QPointF(7, 0);
+    piece.corners << static_cast<int>(outline.size());
+    for (int i = 0; i < 10; ++i)
+    {
+        const double a = M_PI / 2 * i / 10;
+        outline << QPointF(19 + 5.5 * (1 - std::cos(a)), 4 + 18 * std::sin(a));
+    }
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(24.5, 22);
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(24.5, 62);
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(0, 62);
+    return piece;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief A short sleeve: a cap 34 cm wide and 12 cm high, then 20 cm to the hem. Edges: cap, underarm, hem,
+ *  underarm. */
+PatternPiece tshirtSleeve(quint32 id)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = QStringLiteral("Sleeve");
+    piece.quantity = 2;
+    QPolygonF &outline = piece.seamLine;
+    for (int i = 0; i < 16; ++i)
+    {
+        const double x = 34.0 * i / 16;
+        outline << QPointF(x, 12 - 12 * std::sin(M_PI * x / 34));
+    }
+    piece.corners << 0 << static_cast<int>(outline.size());
+    outline << QPointF(34, 12);
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(32, 32);
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(2, 32);
+    return piece;
+}
+
+enum BodiceEdge
+{
+    Neck,
+    Shoulder,
+    Armhole,
+    Side,
+    Hem,
+    Center
+};
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::garmentPanelEdges()
+{
+    const GarmentPanel panel = rectanglePanel(20, 40);
+    QCOMPARE(panel.edgeCount(), 4);
+    QCOMPARE(panel.outlineCount, 48); // 8 + 16 + 8 + 16 points, 2.5 cm apart
+
+    double perimeter = 0;
+    for (int e = 0; e < panel.edgeCount(); ++e)
+    {
+        const QVector<int> vertices = panel.edgeVertices(e);
+        QCOMPARE(vertices.constFirst(), panel.corners.at(e));
+        QCOMPARE(vertices.constLast(), panel.corners.at((e + 1) % 4));
+        perimeter += panel.edgeLength(e);
+    }
+    QVERIFY(qAbs(panel.edgeLength(0) - 20) < 1e-4);
+    QVERIFY(qAbs(panel.edgeLength(1) - 40) < 1e-4);
+    QVERIFY(qAbs(perimeter - 120) < 1e-4);
+
+    // The last edge wraps around to the first corner.
+    const QVector<int> last = panel.edgeVertices(3);
+    QCOMPARE(last.size(), 17);
+    QCOMPARE(last.constLast(), 0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsBodice()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {bodiceWithCorners(1, QStringLiteral("Front")), bodiceWithCorners(2, QStringLiteral("Back"))};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 4); // both halves of the front and of the back
+    for (const GarmentPanel &panel : panels)
+    {
+        QCOMPARE(panel.edgeCount(), 6);
+        QVERIFY(panel.sewable);
+    }
+
+    // Folds, side seams and shoulder seams; armholes, necklines and hems stay open.
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    QCOMPARE(seams.size(), 6);
+    int folds = 0;
+    int sides = 0;
+    int shoulders = 0;
+    for (const Seam &seam : seams)
+    {
+        QCOMPARE(seam.edgeA, seam.edgeB);
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        switch (seam.edgeA)
+        {
+            case Center:
+                ++folds;
+                QCOMPARE(a.pieceId, b.pieceId); // a half sewn to its mirrored copy
+                QVERIFY(a.copy != b.copy);
+                break;
+            case Side:
+                ++sides;
+                QVERIFY(a.pieceId != b.pieceId); // front to back
+                break;
+            case Shoulder:
+                ++shoulders;
+                QVERIFY(a.pieceId != b.pieceId);
+                break;
+            default:
+                QFAIL(qPrintable(QStringLiteral("edge %1 should not be sewn").arg(seam.edgeA)));
+        }
+    }
+    QCOMPARE(folds, 2);
+    QCOMPARE(sides, 2);
+    QCOMPARE(shoulders, 2);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsDart()
+{
+    // A skirt panel with a waist dart: two 10 cm legs meeting at a sharp point.
+    QPolygonF outline;
+    outline << QPointF(0, 0) << QPointF(10, 0) << QPointF(12, 10) << QPointF(14, 0) << QPointF(24, 0)
+            << QPointF(26, 50) << QPointF(-2, 50);
+    GarmentPanel panel;
+    QVector<int> outlineVertex;
+    panel.rest = PieceMesher::mesh(outline, 2.5, &outlineVertex);
+    panel.shape = panel.rest;
+    panel.outlineCount = static_cast<int>(PieceMesher::resample(outline, 2.5).size());
+    panel.corners = outlineVertex;
+
+    const QVector<Seam> seams = SeamFinder::find({panel});
+    QCOMPARE(seams.size(), 1);
+    QCOMPARE(qMin(seams.constFirst().edgeA, seams.constFirst().edgeB), 1);
+    QCOMPARE(qMax(seams.constFirst().edgeA, seams.constFirst().edgeB), 2);
+    QVERIFY(seams.constFirst().reversed);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::bodyColliderInsideOutside()
+{
+    Mesh sphere = sphereMesh(QVector3D(0, 100, 0), 20);
+    for (int flip = 0; flip < 2; ++flip)
+    {
+        if (flip == 1)
+        {
+            // Normals and winding pointing in: the collider still knows inside from outside.
+            for (int i = 0; i + 2 < sphere.indices.size(); i += 3)
+            {
+                std::swap(sphere.indices[i + 1], sphere.indices[i + 2]);
+            }
+        }
+        BodyCollider collider;
+        collider.build(sphere, 3.0f);
+        QVector3D surface;
+        QVector3D normal;
+        const float outside = collider.closest(QVector3D(0, 121, 0), &surface, &normal);
+        QVERIFY2(qAbs(outside - 1.0f) < 0.1f, qPrintable(QString::number(outside)));
+        QVERIFY(normal.y() > 0.9f);
+        const float inside = collider.closest(QVector3D(19.0f, 100, 0), &surface, &normal);
+        QVERIFY2(inside < 0 && inside > -2.0f, qPrintable(QString::number(inside)));
+        QVERIFY(normal.x() > 0.9f);
+        QCOMPARE(collider.closest(QVector3D(0, 130, 0)), collider.reach()); // out of reach
+        QCOMPARE(collider.closest(QVector3D(0, 100, 0)), collider.reach()); // deep inside
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothDrapesOverSphere()
+{
+    // A 60 cm square of cloth dropped on a ball: it hangs over it and does not go through.
+    GarmentPanel cloth = rectanglePanel(60, 60);
+    for (QVector3D &p : cloth.shape.positions)
+    {
+        p = QVector3D(p.x() - 30, 125, p.y() - 30);
+    }
+    const int middle = [&cloth]()
+    {
+        int best = 0;
+        for (int v = 0; v < cloth.shape.positions.size(); ++v)
+        {
+            if (QVector2D(cloth.shape.positions.at(v).x(), cloth.shape.positions.at(v).z()).length()
+                < QVector2D(cloth.shape.positions.at(best).x(), cloth.shape.positions.at(best).z()).length())
+            {
+                best = v;
+            }
+        }
+        return best;
+    }();
+
+    ClothSimulator simulator;
+    simulator.setBody(sphereMesh(QVector3D(0, 100, 0), 20));
+    simulator.setGarment({cloth}, {});
+    QCOMPARE(simulator.particleCount(), cloth.shape.vertexCount());
+    for (int frame = 0; frame < 75; ++frame)
+    {
+        simulator.step();
+        QVERIFY2(simulator.maxPenetration() < 0.5f, qPrintable(QString::number(simulator.maxPenetration())));
+    }
+
+    const GarmentPanel draped = simulator.panels().constFirst();
+    const float top = draped.shape.positions.at(middle).y();
+    QVERIFY2(qAbs(top - 120.4f) < 1.0f, qPrintable(QString::number(top))); // resting on the top of the ball
+    float lowest = top;
+    for (int v = 0; v < cloth.outlineCount; ++v)
+    {
+        lowest = qMin(lowest, draped.shape.positions.at(v).y());
+    }
+    QVERIFY2(lowest < 105.0f, qPrintable(QString::number(lowest))); // the edges hang down
+
+    // The fabric does not stretch.
+    for (int e = 0; e < cloth.edgeCount(); ++e)
+    {
+        const QVector<int> vertices = cloth.edgeVertices(e);
+        double length = 0;
+        for (int i = 1; i < vertices.size(); ++i)
+        {
+            length += static_cast<double>(
+                (draped.shape.positions.at(vertices.at(i)) - draped.shape.positions.at(vertices.at(i - 1))).length());
+        }
+        QVERIFY2(qAbs(length - 60) < 3.0, qPrintable(QString::number(length)));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothSewsTube()
+{
+    // Two panels facing each other, 10 cm apart, sewn along both long sides into a tube, without gravity.
+    GarmentPanel front = rectanglePanel(20, 40);
+    GarmentPanel back = front;
+    for (QVector3D &p : front.shape.positions)
+    {
+        p = QVector3D(p.x() - 10, 100 - p.y(), 5);
+    }
+    for (QVector3D &p : back.shape.positions)
+    {
+        p = QVector3D(p.x() - 10, 100 - p.y(), -5);
+    }
+
+    const QVector<Seam> seams = SeamFinder::find({front, back});
+    QCOMPARE(seams.size(), 3); // both sides and the top; the bottom is the hem
+
+    ClothSettings settings;
+    settings.gravity = 0;
+    ClothSimulator simulator;
+    simulator.setSettings(settings);
+    simulator.setGarment({front, back}, seams);
+    QCOMPARE(simulator.seamCount(), 3);
+    QVERIFY(simulator.maxSeamGap() > 9.0f);
+    QVERIFY(!simulator.isSewn());
+    for (int frame = 0; frame < 30 && !simulator.isSewn(); ++frame)
+    {
+        simulator.step();
+    }
+    QVERIFY(simulator.isSewn());
+    QVERIFY2(simulator.maxSeamGap() < 0.5f, qPrintable(QString::number(simulator.maxSeamGap())));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSetsInSleeves()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          tshirtSleeve(3)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 6);
+
+    // Folds, sides, shoulders and the sleeves' underarm seams; then each sleeve cap in two parts, to the front and
+    // back armholes on its side. The necklines and hems stay open.
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    QCOMPARE(seams.size(), 12);
+    int capParts = 0;
+    for (const Seam &seam : seams)
+    {
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        if (a.pieceId != 3 || seam.edgeA != 0)
+        {
+            QCOMPARE(seam.startA, 0.0);
+            QCOMPARE(seam.endA, 1.0);
+            continue;
+        }
+        ++capParts;
+        QVERIFY(b.pieceId == 1 || b.pieceId == 2);
+        QCOMPARE(seam.edgeB, static_cast<int>(Armhole));
+        // On the same side of the body.
+        QVERIFY(a.shape.bounds().center().x() * b.shape.bounds().center().x() > 0);
+        // The cap is shared out by the armholes' lengths, the first part from the start of the cap.
+        const double share = b.edgeLength(seam.edgeB) / (b.edgeLength(Armhole) * 2);
+        QVERIFY(qAbs((seam.endA - seam.startA) - share) < 0.01);
+    }
+    QCOMPARE(capParts, 4);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothSewsShirtOnBody()
+{
+    // A T-shirt sewn and draped on the default body: the seams close, the shirt hangs from the shoulders and does
+    // not go through the body.
+    const BodyMeasurements measurements;
+    const MakeHumanFit fit = MakeHumanFitter::fit(measurements);
+    QVERIFY(fit.valid);
+
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          tshirtSleeve(3)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels =
+        piecesPanel.panels(BodyFrame::fromMeasurements(measurements).withArm(fit.leftShoulder, fit.leftWrist));
+    const QVector<Seam> seams = SeamFinder::find(panels);
+
+    ClothSimulator simulator;
+    simulator.setBody(fit.mesh);
+    simulator.setGarment(panels, seams);
+    QCOMPARE(simulator.seamCount(), 12);
+    QElapsedTimer timer;
+    timer.start();
+    int frames = 0;
+    for (; frames < 75; ++frames)
+    {
+        simulator.step();
+    }
+    qDebug() << simulator.particleCount() << "particles," << frames << "frames in" << timer.elapsed() << "ms";
+
+    QVERIFY(simulator.isSewn());
+    QVERIFY2(simulator.maxSeamGap() < 1.0f, qPrintable(QString::number(simulator.maxSeamGap())));
+    QVERIFY2(simulator.maxPenetration() < 1.0f, qPrintable(QString::number(simulator.maxPenetration())));
+
+    float top = std::numeric_limits<float>::lowest();
+    for (const GarmentPanel &panel : simulator.panels())
+    {
+        top = qMax(top, panel.shape.bounds().maximum.y());
+    }
+    const auto shoulders = static_cast<float>(measurements.value(BodyMeasurement::ShoulderTipHeight));
+    QVERIFY2(top > shoulders, qPrintable(QStringLiteral("%1 below the shoulders at %2").arg(top).arg(shoulders)));
 }
 
 QTEST_MAIN(TST_Seamly3D)

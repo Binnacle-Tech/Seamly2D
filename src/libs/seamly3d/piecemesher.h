@@ -47,6 +47,7 @@ struct PatternPiece
     QPolygonF seamLine{};   ///< The piece's outline along the seam line (the sewing line)
     int       quantity{1};  ///< How many to cut
     bool      onFold{false};
+    QVector<int> corners{}; ///< Indices in seamLine of the piece's own points (where its seam lines meet)
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -61,10 +62,17 @@ struct PatternPiece
 class PieceMesher
 {
 public:
-    static Mesh mesh(const QPolygonF &outline, double maxEdge);
+    /**
+     * @brief mesh builds the piece mesh. Its first vertices are the outline, in order.
+     * @param outlineVertex receives, for each point of @p outline, the mesh vertex it became.
+     */
+    static Mesh mesh(const QPolygonF &outline, double maxEdge, QVector<int> *outlineVertex = nullptr);
 
-    /** @brief resample returns the closed outline with extra points so that no edge is longer than @p maxEdge. */
-    static QPolygonF resample(const QPolygonF &outline, double maxEdge);
+    /**
+     * @brief resample returns the closed outline with extra points so that no edge is longer than @p maxEdge.
+     * @param outlineIndex receives, for each point of @p outline, its index in the result (repeated points share one).
+     */
+    static QPolygonF resample(const QPolygonF &outline, double maxEdge, QVector<int> *outlineIndex = nullptr);
 };
 
 } // namespace Seamly3D

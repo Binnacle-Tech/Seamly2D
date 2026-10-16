@@ -32,11 +32,14 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
 
 #include "patternprovider.h"
+
+#include <algorithm>
 
 namespace Seamly3D
 {
@@ -67,6 +70,9 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     , m_reloadButton(new QPushButton(tr("Reload"), this))
     , m_measurementsButton(new QPushButton(tr("Use Pattern's Measurements"), this))
     , m_followCheckBox(new QCheckBox(tr("Follow pattern changes"), this))
+    , m_simulateButton(new QPushButton(tr("Sew && Drape"), this))
+    , m_resetButton(new QPushButton(tr("Reset"), this))
+    , m_simulationStatus(new QLabel(this))
     , m_followTimer(new QTimer(this))
 {
     auto *layout = new QVBoxLayout(this);
@@ -113,6 +119,20 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     m_status->setWordWrap(true);
     layout->addWidget(m_status);
 
+    // Sewing and draping: the pieces are sewn along the seams found between them, then fall onto the body.
+    m_simulateButton->setCheckable(true);
+    m_simulateButton->setObjectName(QStringLiteral("seamly3dSimulate_Button"));
+    m_simulateButton->setToolTip(tr("Sew the pieces together and drape the garment on the body"));
+    connect(m_simulateButton, &QPushButton::toggled, this, &PatternPiecesPanel::simulationToggled);
+    m_resetButton->setToolTip(tr("Undo the sewing and draping: back to the pieces around the body"));
+    connect(m_resetButton, &QPushButton::clicked, this, &PatternPiecesPanel::simulationResetRequested);
+    auto *simulation = new QHBoxLayout;
+    simulation->addWidget(m_simulateButton, 1);
+    simulation->addWidget(m_resetButton);
+    layout->addLayout(simulation);
+    m_simulationStatus->setWordWrap(true);
+    layout->addWidget(m_simulationStatus);
+
     // Pattern edits come in bursts (every point of a drag): reload once they settle.
     m_followTimer->setSingleShot(true);
     m_followTimer->setInterval(400);
@@ -131,6 +151,8 @@ void PatternPiecesPanel::setProvider(const std::shared_ptr<PatternProvider> &pro
     m_reloadButton->setEnabled(provider != nullptr);
     m_measurementsButton->setEnabled(provider != nullptr);
     m_followCheckBox->setEnabled(provider != nullptr);
+    m_simulateButton->setEnabled(provider != nullptr);
+    m_resetButton->setEnabled(provider != nullptr);
 
     if (provider == nullptr)
     {
@@ -175,7 +197,7 @@ void PatternPiecesPanel::reload()
 void PatternPiecesPanel::setPieces(const QVector<PatternPiece> &pieces)
 {
     m_pieces = pieces;
-    m_flatMeshes.clear();
+    m_flatPieces.clear();
 
     for (const PatternPiece &piece : m_pieces)
     {
@@ -257,39 +279,103 @@ void PatternPiecesPanel::rebuildList()
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-const Mesh &PatternPiecesPanel::flatMesh(const PatternPiece &piece) const
+const PatternPiecesPanel::FlatPiece &PatternPiecesPanel::flatPiece(const PatternPiece &piece) const
 {
-    auto it = m_flatMeshes.find(piece.id);
-    if (it == m_flatMeshes.end())
+    auto it = m_flatPieces.find(piece.id);
+    if (it == m_flatPieces.end())
     {
-        it = m_flatMeshes.insert(piece.id, PieceMesher::mesh(piece.seamLine, meshEdge));
+        FlatPiece flat;
+        QVector<int> outlineVertex;
+        flat.mesh = PieceMesher::mesh(piece.seamLine, meshEdge, &outlineVertex);
+        flat.outlineCount = static_cast<int>(PieceMesher::resample(piece.seamLine, meshEdge).size());
+        for (const int corner : piece.corners)
+        {
+            const int vertex = outlineVertex.value(corner, -1);
+            if (vertex >= 0 && vertex < flat.outlineCount && !flat.corners.contains(vertex))
+            {
+                flat.corners.append(vertex);
+            }
+        }
+        std::sort(flat.corners.begin(), flat.corners.end());
+        if (flat.corners.isEmpty())
+        {
+            flat.corners.append(0); // no corners known: the whole outline is one edge
+        }
+        it = m_flatPieces.insert(piece.id, flat);
     }
     return it.value();
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-QVector<Viewport3D::Overlay> PatternPiecesPanel::overlays(const BodyFrame &frame) const
+void PatternPiecesPanel::setSimulationRunning(bool running)
 {
-    QVector<Viewport3D::Overlay> result;
+    const QSignalBlocker blocker(m_simulateButton);
+    m_simulateButton->setChecked(running);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::setSimulationStatus(const QString &text)
+{
+    m_simulationStatus->setText(text);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::setSimulationDetails(const QString &details)
+{
+    m_simulationStatus->setToolTip(details);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
+{
+    QVector<GarmentPanel> result;
     float asideStart = 0;
     for (int i = 0; i < m_pieces.size(); ++i)
     {
         const PatternPiece &piece = m_pieces.at(i);
         const Settings s = settings(piece.id);
-        const QColor color = pieceColors[i % (sizeof(pieceColors) / sizeof(pieceColors[0]))];
+        const FlatPiece &flat = flatPiece(piece);
 
-        const QVector<Mesh> placed = PieceArrangement::place(flatMesh(piece), piece.seamLine.boundingRect(),
-                                                             s.placement, s.pair, s.flip, frame, asideStart);
+        const QVector<Mesh> placed = PieceArrangement::place(flat.mesh, piece.seamLine.boundingRect(), s.placement,
+                                                             s.pair, s.flip, frame, asideStart);
         if (s.placement == PiecePlacement::Aside)
         {
             // Next piece in the row starts after this one (and its mirrored copy), with a gap.
             const auto width = static_cast<float>(piece.seamLine.boundingRect().width());
             asideStart += (s.pair ? 2 : 1) * (width + 15.0f);
         }
-        for (const Mesh &mesh : placed)
+        for (int copy = 0; copy < placed.size(); ++copy)
         {
-            result.append({mesh, color});
+            GarmentPanel panel;
+            panel.pieceId = piece.id;
+            panel.copy = copy;
+            panel.name = piece.name;
+            panel.color = pieceColors[i % (sizeof(pieceColors) / sizeof(pieceColors[0]))];
+            panel.sewable = s.placement != PiecePlacement::Aside;
+            panel.rest = flat.mesh;
+            panel.shape = placed.at(copy);
+            panel.outlineCount = flat.outlineCount;
+            panel.corners = flat.corners;
+            result.append(panel);
         }
+    }
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<Viewport3D::Overlay> PatternPiecesPanel::overlays(const BodyFrame &frame) const
+{
+    return overlays(panels(frame));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+QVector<Viewport3D::Overlay> PatternPiecesPanel::overlays(const QVector<GarmentPanel> &panels)
+{
+    QVector<Viewport3D::Overlay> result;
+    result.reserve(panels.size());
+    for (const GarmentPanel &panel : panels)
+    {
+        result.append({panel.shape, panel.color});
     }
     return result;
 }

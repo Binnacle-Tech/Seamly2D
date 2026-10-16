@@ -33,6 +33,7 @@
 
 #include <memory>
 
+#include "garment.h"
 #include "piecearrangement.h"
 #include "piecemesher.h"
 #include "viewport3d.h"
@@ -75,14 +76,25 @@ public:
     Settings settings(quint32 id) const;
     void     setSettings(quint32 id, const Settings &settings);
 
+    /** @brief panels returns the pieces (and their mirrored copies) placed around a body of these sizes. */
+    QVector<GarmentPanel> panels(const BodyFrame &frame) const;
+
     /** @brief overlays returns the piece meshes placed around a body of these sizes, one color per piece. */
     QVector<Viewport3D::Overlay> overlays(const BodyFrame &frame) const;
+    static QVector<Viewport3D::Overlay> overlays(const QVector<GarmentPanel> &panels);
 
     static constexpr double meshEdge = 2.5; ///< centimeters between mesh points of the pieces
+
+    /** @brief setSimulationRunning shows whether the garment is being sewn and draped (the button's state). */
+    void     setSimulationRunning(bool running);
+    void     setSimulationStatus(const QString &text);
+    void     setSimulationDetails(const QString &details); ///< shown as the status' tooltip (the seams found)
 
 signals:
     void arrangementChanged();
     void useMeasurementsRequested();
+    void simulationToggled(bool run);
+    void simulationResetRequested();
 
 public slots:
     void reload();
@@ -91,18 +103,28 @@ private:
     Q_DISABLE_COPY_MOVE(PatternPiecesPanel)
 
     void rebuildList();
-    const Mesh &flatMesh(const PatternPiece &piece) const;
+    /** @brief A piece's flat mesh: its first outlineCount vertices are its outline, corners among them. */
+    struct FlatPiece
+    {
+        Mesh         mesh{};
+        int          outlineCount{0};
+        QVector<int> corners{};
+    };
+    const FlatPiece &flatPiece(const PatternPiece &piece) const;
 
     std::shared_ptr<PatternProvider> m_provider{};
     QVector<PatternPiece>            m_pieces{};
     QHash<quint32, Settings>         m_settings{};
-    mutable QHash<quint32, Mesh>     m_flatMeshes{};
+    mutable QHash<quint32, FlatPiece> m_flatPieces{};
 
     QTreeWidget *m_list;
     QLabel      *m_status;
     QPushButton *m_reloadButton;
     QPushButton *m_measurementsButton;
     QCheckBox   *m_followCheckBox;
+    QPushButton *m_simulateButton;
+    QPushButton *m_resetButton;
+    QLabel      *m_simulationStatus;
     QTimer      *m_followTimer;
     bool         m_updatingList{false};
 };

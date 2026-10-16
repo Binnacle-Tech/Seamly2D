@@ -59,7 +59,7 @@ enum class PiecePlacement : int
  */
 struct BodyFrame
 {
-    float neckHeight{140.0f};      ///< where the top of torso pieces goes
+    float neckHeight{144.0f};      ///< where the top of torso pieces goes (a little above the neck and shoulders)
     float shoulderHeight{137.0f};  ///< where the top of sleeves goes
     float torsoRadius{17.0f};      ///< radius of the cylinder torso pieces wrap around
     float sleeveRadius{7.0f};      ///< radius of the cylinder sleeves wrap around (arm plus clearance)

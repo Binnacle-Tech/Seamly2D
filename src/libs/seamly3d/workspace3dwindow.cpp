@@ -29,6 +29,7 @@
 #include <QAction>
 #include <QComboBox>
 #include <QDockWidget>
+#include <QElapsedTimer>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QGuiApplication>
@@ -42,6 +43,7 @@
 #include <QTimer>
 #include <QToolBar>
 
+#include <algorithm>
 #include <memory>
 
 #include "bodymeasurementspanel.h"
@@ -65,6 +67,7 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     , m_statusLabel(new QLabel(this))
     , m_regenerateTimer(new QTimer(this))
     , m_bodyKindComboBox(new QComboBox(this))
+    , m_simulationTimer(new QTimer(this))
 {
     setObjectName(QStringLiteral("Seamly3DWorkspaceWindow"));
     setWindowTitle(tr("3D Workspace"));
@@ -85,6 +88,12 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
     connect(m_piecesPanel, &PatternPiecesPanel::arrangementChanged, this, &Workspace3DWindow::updatePieces);
     connect(m_piecesPanel, &PatternPiecesPanel::useMeasurementsRequested, this,
             &Workspace3DWindow::usePatternMeasurements);
+    connect(m_piecesPanel, &PatternPiecesPanel::simulationToggled, this, &Workspace3DWindow::setSimulationRunning);
+    connect(m_piecesPanel, &PatternPiecesPanel::simulationResetRequested, this, &Workspace3DWindow::updatePieces);
+
+    // The simulation advances a few frames at a time between repaints, so the window stays responsive.
+    m_simulationTimer->setInterval(15);
+    connect(m_simulationTimer, &QTimer::timeout, this, &Workspace3DWindow::stepSimulation);
 
     // Spin box edits arrive one at a time; regenerate once they settle.
     m_regenerateTimer->setSingleShot(true);
@@ -142,7 +151,7 @@ PatternPiecesPanel *Workspace3DWindow::piecesPanel() const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void Workspace3DWindow::updatePieces()
+BodyFrame Workspace3DWindow::bodyFrame() const
 {
     // Pieces wrap around the measured body; an imported model has no measurements, so they use the panel's.
     BodyFrame frame = BodyFrame::fromMeasurements(m_measurementsPanel->measurements());
@@ -152,7 +161,114 @@ void Workspace3DWindow::updatePieces()
         frame = bodyKind() == BodyKind::Realistic && m_fit.valid ? frame.withArm(m_fit.leftShoulder, m_fit.leftWrist)
                                                                   : frame.withArm(m_body.leftShoulder, m_body.leftWrist);
     }
-    m_viewport->setOverlays(m_piecesPanel->overlays(frame));
+    return frame;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::updatePieces()
+{
+    // The pieces, their arrangement or the body changed: a garment sewn before no longer applies.
+    resetSimulation();
+    m_viewport->setOverlays(m_piecesPanel->overlays(bodyFrame()));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::resetSimulation()
+{
+    m_simulationTimer->stop();
+    m_simulator.clear();
+    m_piecesPanel->setSimulationRunning(false);
+    m_piecesPanel->setSimulationStatus(QString());
+    m_piecesPanel->setSimulationDetails(QString());
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::setSimulationRunning(bool run)
+{
+    if (!run)
+    {
+        m_simulationTimer->stop();
+        if (!m_simulator.isEmpty())
+        {
+            m_piecesPanel->setSimulationStatus(tr("Paused."));
+        }
+        return;
+    }
+
+    if (m_simulator.isEmpty())
+    {
+        const QVector<GarmentPanel> panels = m_piecesPanel->panels(bodyFrame());
+        const bool sewable = std::any_of(panels.cbegin(), panels.cend(),
+                                         [](const GarmentPanel &panel) { return panel.sewable; });
+        if (!sewable)
+        {
+            m_piecesPanel->setSimulationRunning(false);
+            m_piecesPanel->setSimulationStatus(tr("Place some pieces on the body first (front, back, sides, sleeves)."));
+            return;
+        }
+
+        const QVector<Seam> seams = SeamFinder::find(panels);
+        QStringList details;
+        const auto edgeName = [&panels](int panel, int edge)
+        {
+            const GarmentPanel &p = panels.at(panel);
+            return tr("%1%2, edge %3")
+                .arg(p.name, p.copy > 0 ? tr(" (mirrored)") : QString())
+                .arg(edge + 1);
+        };
+        for (const Seam &seam : seams)
+        {
+            details.append(edgeName(seam.panelA, seam.edgeA) + QStringLiteral(" \u2194 ")
+                           + edgeName(seam.panelB, seam.edgeB));
+        }
+
+        m_simulator.setBody(m_viewport->mesh());
+        m_simulator.setGarment(panels, seams);
+        m_settledFrames = 0;
+        m_piecesPanel->setSimulationStatus(tr("%n seam(s) found.", nullptr, static_cast<int>(seams.size())));
+        m_piecesPanel->setSimulationDetails(details.join(QLatin1Char('\n')));
+    }
+    m_simulationTimer->start();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::stepSimulation()
+{
+    if (m_simulator.isEmpty())
+    {
+        m_simulationTimer->stop();
+        return;
+    }
+
+    // As many frames as fit in a short time slice, then show where the cloth is.
+    QElapsedTimer slice;
+    slice.start();
+    do
+    {
+        m_simulator.step();
+    } while (slice.elapsed() < 25);
+    m_viewport->setOverlays(PatternPiecesPanel::overlays(m_simulator.panels()));
+
+    const QString seams = tr("%n seam(s)", nullptr, m_simulator.seamCount());
+    if (!m_simulator.isSewn())
+    {
+        m_piecesPanel->setSimulationStatus(
+            tr("Sewing %1: widest gap %2 cm.").arg(seams).arg(m_simulator.maxSeamGap(), 0, 'f', 1));
+        return;
+    }
+
+    // Draped once the cloth has stopped moving for a moment; then there is no need to keep computing.
+    m_settledFrames = m_simulator.averageSpeed() < 0.5f ? m_settledFrames + 1 : 0;
+    if (m_settledFrames >= 10)
+    {
+        m_simulationTimer->stop();
+        m_piecesPanel->setSimulationRunning(false);
+        m_piecesPanel->setSimulationStatus(
+            tr("Draped (%1, %2 s of fabric time).").arg(seams).arg(m_simulator.time(), 0, 'f', 1));
+        return;
+    }
+    m_piecesPanel->setSimulationStatus(
+        tr("Draping (%1): %2 s.").arg(seams).arg(m_simulator.time(), 0, 'f', 1));
 }
 
 //---------------------------------------------------------------------------------------------------------------------
