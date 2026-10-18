@@ -39,6 +39,8 @@
 #include "../vpatterndb/vcontainer.h"
 #include "../vgeometry/vpointf.h"
 #include "../vpatterndb/vpiece.h"
+#include "../vpatterndb/vpiecenode.h"
+#include "../vpatterndb/vpiecepath.h"
 
 namespace Seamly3D
 {
@@ -98,6 +100,35 @@ QVector<PatternPiece> PatternSource::pieces(QString *error)
                 }
             }
             std::sort(result3D.corners.begin(), result3D.corners.end());
+
+            // Its notches, where seams are lined up.
+            const VPiecePath path = piece.GetPath();
+            for (int n = 0; n < path.nodeCount(); ++n)
+            {
+                const VPieceNode &node = path.at(n);
+                if (node.GetTypeTool() != Tool::NodePoint || node.isExcluded() || !node.isNotch())
+                {
+                    continue;
+                }
+                const QSharedPointer<VPointF> point = data->GeometricObject<VPointF>(node.GetId());
+                const QPointF at(FromPixel(point->x(), Unit::Cm), FromPixel(point->y(), Unit::Cm));
+                int nearest = -1;
+                qreal nearestDistance = 0.05; // centimeters
+                for (int i = 0; i < result3D.seamLine.size(); ++i)
+                {
+                    const qreal distance = QLineF(result3D.seamLine.at(i), at).length();
+                    if (distance < nearestDistance)
+                    {
+                        nearestDistance = distance;
+                        nearest = i;
+                    }
+                }
+                if (nearest >= 0 && !result3D.notches.contains(nearest))
+                {
+                    result3D.notches.append(nearest);
+                }
+            }
+            std::sort(result3D.notches.begin(), result3D.notches.end());
 
             const VPieceLabelData &label = piece.GetPatternPieceData();
             result3D.quantity = qMax(1, label.GetQuantity());

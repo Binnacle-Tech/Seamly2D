@@ -148,6 +148,8 @@ public:
                                                   const QVector<QColor> &colors);
     static Viewport3D::LineSet edgeLine(const GarmentPanel &panel, int edge, const QColor &color, float width,
                                         double from = 0.0, double to = 1.0);
+    /** @brief notchLines returns a short tick into each piece at each of its notches. */
+    static Viewport3D::LineSet notchLines(const QVector<GarmentPanel> &panels);
 
 signals:
     void arrangementChanged();
@@ -180,6 +182,7 @@ private:
         Mesh         mesh{};
         int          outlineCount{0};
         QVector<int> corners{};
+        QVector<int> notches{};
     };
     const FlatPiece &flatPiece(const PatternPiece &piece) const;
 

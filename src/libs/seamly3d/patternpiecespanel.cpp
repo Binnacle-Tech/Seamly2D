@@ -53,6 +53,8 @@
 #include "patternprovider.h"
 
 #include <algorithm>
+#include <limits>
+#include <numeric>
 
 namespace Seamly3D
 {
@@ -772,6 +774,15 @@ const PatternPiecesPanel::FlatPiece &PatternPiecesPanel::flatPiece(const Pattern
         {
             flat.corners.append(0); // no corners known: the whole outline is one edge
         }
+        for (const int notch : piece.notches)
+        {
+            const int vertex = outlineVertex.value(notch, -1);
+            if (vertex >= 0 && vertex < flat.outlineCount && !flat.notches.contains(vertex))
+            {
+                flat.notches.append(vertex);
+            }
+        }
+        std::sort(flat.notches.begin(), flat.notches.end());
         it = m_flatPieces.insert(piece.id, flat);
     }
     return it.value();
@@ -847,31 +858,70 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
         }
     }
 
+    // Several pieces in one place (the panels of a princess bodice, a two-piece sleeve) go side by side around it
+    // rather than on top of each other: from the center out, so the piece cut on the fold (or named the center one)
+    // is on the center line, and side panels at the side.
+    QVector<int> order(m_pieces.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::stable_sort(order.begin(), order.end(),
+                     [this](int a, int b)
+                     {
+                         return PieceArrangement::centerFirst(m_pieces.at(a))
+                                < PieceArrangement::centerFirst(m_pieces.at(b));
+                     });
+    // Neighbours meet at their tops (where a yoke above them is sewn on): each piece's top, as wrapped around (from
+    // its center line for a half piece, from its middle for a whole one), starts where the one before it ends.
+    QHash<quint32, float> spread; // degrees around, by piece
+    for (const int i : order)
+    {
+        const PatternPiece &piece = m_pieces.at(i);
+        const Settings s = settings(piece.id);
+        if (!spreads(s.placement) || PieceArrangement::isYoke(piece.name))
+        {
+            continue;
+        }
+        const QRectF bounds = piece.seamLine.boundingRect();
+        float topFrom = std::numeric_limits<float>::max();
+        float topTo = std::numeric_limits<float>::lowest();
+        for (const QPointF &point : piece.seamLine)
+        {
+            if (point.y() <= bounds.top() + bounds.height() * 0.1)
+            {
+                const double across = s.pair ? (s.flip ? bounds.right() - point.x() : point.x() - bounds.left())
+                                             : (s.flip ? bounds.center().x() - point.x()
+                                                       : point.x() - bounds.center().x());
+                topFrom = qMin(topFrom, static_cast<float>(across));
+                topTo = qMax(topTo, static_cast<float>(across));
+            }
+        }
+        if (topFrom > topTo)
+        {
+            continue;
+        }
+        const int place = static_cast<int>(s.placement);
+        if (taken.contains(place))
+        {
+            const float offset = taken.value(place) - topFrom;
+            spread.insert(piece.id, qRadiansToDegrees(offset / PieceArrangement::aroundRadius(s.placement, frame)));
+            taken[place] = offset + topTo;
+        }
+        else
+        {
+            taken.insert(place, topTo);
+        }
+    }
+
     for (int i = 0; i < m_pieces.size(); ++i)
     {
         const PatternPiece &piece = m_pieces.at(i);
         const Settings s = settings(piece.id);
         const FlatPiece &flat = flatPiece(piece);
 
-        // Several pieces in one place (the panels of a princess bodice, a two-piece sleeve) go side by side around
-        // it, in the order of the list, rather than on top of each other.
         PieceAdjustment adjustment = s.adjustment;
-        const auto width = static_cast<float>(piece.seamLine.boundingRect().width());
-        const bool yoke = PieceArrangement::isYoke(piece.name);
-        if (spreads(s.placement) && !yoke)
+        if (spreads(s.placement) && !PieceArrangement::isYoke(piece.name))
         {
             adjustment.lift -= yokes.value(static_cast<int>(s.placement));
-            const int place = static_cast<int>(s.placement);
-            if (taken.contains(place))
-            {
-                const float offset = s.pair ? taken.value(place) : taken.value(place) + width / 2;
-                adjustment.around += qRadiansToDegrees(offset / PieceArrangement::aroundRadius(s.placement, frame));
-                taken[place] += width;
-            }
-            else
-            {
-                taken.insert(place, s.pair ? width : width / 2);
-            }
+            adjustment.around += spread.value(piece.id);
         }
 
         const QVector<Mesh> placed = PieceArrangement::place(flat.mesh, piece.seamLine.boundingRect(), s.placement,
@@ -895,6 +945,7 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             panel.shape = placed.at(copy);
             panel.outlineCount = flat.outlineCount;
             panel.corners = flat.corners;
+            panel.notches = flat.notches;
             result.append(panel);
         }
     }
@@ -1358,6 +1409,42 @@ Viewport3D::LineSet PatternPiecesPanel::edgeLine(const GarmentPanel &panel, int 
         }
     }
     return set;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Viewport3D::LineSet PatternPiecesPanel::notchLines(const QVector<GarmentPanel> &panels)
+{
+    Viewport3D::LineSet ticks;
+    ticks.color = QColor(40, 40, 40);
+    ticks.width = 2.0f;
+    for (const GarmentPanel &panel : panels)
+    {
+        if (panel.notches.isEmpty() || panel.outlineCount < 3)
+        {
+            continue;
+        }
+        QVector3D middle;
+        for (const QVector3D &p : panel.shape.positions)
+        {
+            middle += p;
+        }
+        middle /= static_cast<float>(panel.shape.positions.size());
+        for (const int v : panel.notches)
+        {
+            // Square to the outline, in the cloth, into the piece: 1.5 cm long.
+            const QVector3D at = panel.shape.positions.at(v);
+            const QVector3D along = panel.shape.positions.at((v + 1) % panel.outlineCount)
+                                    - panel.shape.positions.at((v + panel.outlineCount - 1) % panel.outlineCount);
+            const QVector3D normal = v < panel.shape.normals.size() ? panel.shape.normals.at(v) : QVector3D(0, 0, 1);
+            QVector3D inward = QVector3D::crossProduct(normal, along).normalized();
+            if (QVector3D::dotProduct(inward, middle - at) < 0)
+            {
+                inward = -inward;
+            }
+            ticks.segments << at << at + inward * 1.5f;
+        }
+    }
+    return ticks;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

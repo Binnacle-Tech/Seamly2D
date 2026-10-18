@@ -501,6 +501,40 @@ bool PieceArrangement::isYoke(const QString &name)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+int PieceArrangement::centerFirst(const PatternPiece &piece)
+{
+    if (piece.onFold)
+    {
+        return 0;
+    }
+    const QString n = piece.name.toLower();
+    const auto has = [&n](std::initializer_list<const char *> words)
+    {
+        for (const char *word : words)
+        {
+            if (n.contains(QString::fromUtf8(word)))
+            {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (has({"center", "centre", "middle", "mitte", "milieu", "medio", "midden", "centrale"}))
+    {
+        return 1;
+    }
+    if (has({"outside", "outer", "side", "seite", "côté", "lado", "zij", "fianco"}))
+    {
+        return 4;
+    }
+    if (has({"inside", "inner", "innen"}))
+    {
+        return 3;
+    }
+    return 2;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 PiecePlacement PieceArrangement::guessFromShape(const QPolygonF &outline)
 {
     const QRectF bounds = outline.boundingRect();

@@ -64,6 +64,34 @@ QVector<int> GarmentPanel::edgeVertices(int edge) const
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+QVector<double> GarmentPanel::edgeNotches(int edge) const
+{
+    QVector<double> result;
+    const QVector<int> vertices = edgeVertices(edge);
+    if (vertices.size() < 3 || notches.isEmpty())
+    {
+        return result;
+    }
+    double along = 0;
+    QVector<double> at(vertices.size(), 0.0);
+    for (int i = 1; i < vertices.size(); ++i)
+    {
+        along += static_cast<double>(
+            (rest.positions.at(vertices.at(i)) - rest.positions.at(vertices.at(i - 1))).length());
+        at[i] = along;
+    }
+    // Inside the edge only: a notch at a corner lines nothing up.
+    for (int i = 1; i + 1 < vertices.size(); ++i)
+    {
+        if (notches.contains(vertices.at(i)) && along > 1e-9)
+        {
+            result.append(at.at(i) / along);
+        }
+    }
+    return result;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 double GarmentPanel::edgeLength(int edge) const
 {
     const QVector<int> vertices = edgeVertices(edge);

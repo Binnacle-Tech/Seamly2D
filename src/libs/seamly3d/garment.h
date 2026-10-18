@@ -58,11 +58,14 @@ struct GarmentPanel
     Mesh         shape{};
     int          outlineCount{0};
     QVector<int> corners{};        ///< Outline vertices, increasing
+    QVector<int> notches{};        ///< Outline vertices with a notch, increasing
 
     int          edgeCount() const;
     /** @brief edgeVertices returns the outline vertices from corner @p edge to the next corner, both included. */
     QVector<int> edgeVertices(int edge) const;
     double       edgeLength(int edge) const; ///< along the flat piece, centimeters
+    /** @brief edgeNotches returns where the notches on an edge are along it: shares of its length, increasing. */
+    QVector<double> edgeNotches(int edge) const;
 };
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -35,6 +35,7 @@
 
 #include "bodymeasurements.h"
 #include "mesh.h"
+#include "piecemesher.h"
 
 namespace Seamly3D
 {
@@ -166,6 +167,12 @@ public:
 
     /** @brief isYoke tells a yoke by its name: it goes on top of the front or back, the other pieces there below it. */
     static bool isYoke(const QString &name);
+
+    /**
+     * @brief centerFirst orders pieces sharing a place from the center out: cut on the fold (0), named the center
+     * one (1), nothing said (2), named inside (3), named side or outside (4).
+     */
+    static int  centerFirst(const PatternPiece &piece);
 
     static QString displayName(PiecePlacement placement);
 

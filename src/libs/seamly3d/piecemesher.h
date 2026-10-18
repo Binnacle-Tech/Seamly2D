@@ -48,6 +48,7 @@ struct PatternPiece
     int       quantity{1};  ///< How many to cut
     bool      onFold{false};
     QVector<int> corners{}; ///< Indices in seamLine of the piece's own points (where its seam lines meet)
+    QVector<int> notches{}; ///< Indices in seamLine of its notches (where seams are lined up)
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -83,11 +84,12 @@ public:
 
     /**
      * @brief sides keeps the corners (indices in @p outline) where the outline turns more than @p minAngle: the
-     * points between two sides. Points along a side (a notch, where a line runs into a curve) are dropped. When none
-     * is sharp, the sharpest one stays.
+     * points between two sides. Points along a side (a notch, where a line runs into a curve) are dropped. Sharp
+     * points closer than @p merge along the outline (a rounded corner traced point by point, a small step) are one
+     * corner, at the sharpest of them. When none is sharp, the sharpest one stays.
      */
     static QVector<int> sides(const QPolygonF &outline, const QVector<int> &corners, double minAngle = 25.0,
-                              double window = 1.0);
+                              double window = 1.0, double merge = 1.5);
 };
 
 } // namespace Seamly3D

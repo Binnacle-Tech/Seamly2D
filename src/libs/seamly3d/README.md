@@ -174,9 +174,12 @@ and draping:
   rest on the front. Two-piece sleeves have a lopsided cap and are not told
   from body panels by shape; front from back is not guessed either.
 * **Several pieces in one place** (the panels of a princess bodice, a
-  two-piece sleeve) go side by side around it in the order of the list,
-  rather than on top of each other. A **yoke** goes on top of the front or
-  back, and the other pieces there hang below it.
+  two-piece sleeve) go side by side around it rather than on top of each
+  other, from the center out: a piece cut on the fold first (it is on the
+  center line), then one named center, then the others in the order of the
+  list, those named inside, then those named side or outside. Neighbours
+  meet at their tops, where a yoke is sewn on. A **yoke** goes on top of the
+  front or back, and the other pieces there hang below it.
 * **Moving a piece by hand:** select it in the list and set **Up** (cm),
   **Around** (degrees) and **Turn** (degrees), or hold **Ctrl** and drag it
   in 3D (Ctrl + click selects it). Up and around are along and about the
@@ -205,7 +208,10 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
 
 * **Seams are found automatically.** A piece's edges are its sides: they run
   between the points where its outline turns sharply (more than 25 degrees),
-  so notches and points along a smooth curve do not split them. Two edges are
+  so notches and points along a smooth curve do not split them. Sharp points
+  closer than 1.5 cm along the outline are one corner, at the sharpest: a
+  rounded corner traced point by point (as imported files have them) or a
+  small step is not a row of tiny edges. Two edges are
   sewn together when they are as long as each other (within 5%), have the
   same shape (one bulges where the other curves in, both are straight, or
   both bulge out alike over the hips), and lie side by side on the same side
@@ -238,9 +244,15 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   ends joined the way they lie. Go on with the next pair; a click beside the
   pieces starts the pair again; the button again stops. It works on the
   pieces as arranged, before they are sewn.
+* **Notches** line seams up: when both sides of a seam have as many notches
+  (inside the part sewn), the first meets the first and so on, and between
+  notches the length is shared out evenly, so ease goes where the pattern
+  puts it (a sleeve cap into its armhole). The notches are the pattern's
+  own (notch points on a piece's main path).
 * **Show seams** draws each seam in 3D as its two edges in its color, with
   ties between the points that meet, on the pieces as arranged and on the
-  cloth as it drapes. Selecting a seam in the list shows its edges in yellow.
+  cloth as it drapes, and each notch as a short dark tick into its piece.
+  Selecting a seam in the list shows its edges in yellow.
 * **Simulation:** position based dynamics (XPBD) in small steps, 30 per frame,
   each passing four times over the stretch and seam constraints. That many
   steps let a waistline, pressed onto the body, pull itself back up: skirts
@@ -429,21 +441,20 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 
 ### Next up
 
-In order, because each one unblocks real patterns rather than test ones:
+In order, because each one unblocks real patterns rather than test ones.
+FreeSewing's Devon jacket, imported from SVG, now hangs on the body as a
+jacket (yokes, panels, collar and sleeves sewn), but:
 
-1. **Imported outlines in fewer, longer edges:** a curve traced from an SVG
-   or DXF file breaks into many short edges where it turns sharply between
-   points (FreeSewing's Devon yoke has 29), so its lower edge no longer
-   lines up with the panels below it. Together with notches (from the
-   pattern) to line seams up and to split edges where the pattern does.
+1. **Sleeves from two pieces** bunch up: their caps are set into the
+   armhole as one edge each, not as a cap made of two pieces, and nothing
+   tells the top sleeve from the under sleeve.
 2. **Fabric grain:** stretch that differs along the warp, the weft and the
    bias, from the grainline, and a fabric per piece.
 3. **Self collision**, which layered garments, fold-over collars and
    tucked-in shirts need.
 4. **Arrange from the pattern itself:** use grainlines and notches to tell
    which way a piece goes, two-piece sleeves and front from back by shape,
-   and pieces wider than their place (Devon's three front panels spread
-   past the side seam).
+   and where a band goes (Devon's "waistband" is the jacket's hem band).
 
 ### 1. Avatar
 
@@ -495,9 +506,11 @@ In order, because each one unblocks real patterns rather than test ones:
 - [x] Sew part of an edge, of either side (Add Seam, in percent)
 - [x] One edge sewn to several (a yoke to the panels below it), and an
   under collar to its upper collar
+- [x] Line seams up by their notches; notches drawn in 3D
+- [x] Fewer, longer edges for outlines traced from imported files
 - [ ] Pick seam edges on the 2D pieces too; sew part of an edge between
-  notches or points, and line seams up by their notches
-- [ ] Fewer, longer edges for outlines traced from imported files
+  notches or points (now in percent)
+- [ ] Two-piece sleeves set into the armhole
 - [ ] Gathers and ease: sew a longer edge into a shorter one on purpose
 - [ ] Cuffs, pockets and facings sewn on; collars that fold over
 - [ ] Openings and closures: button stands that overlap, flies, zips

@@ -535,6 +535,46 @@ void ClothSimulator::addSeam(const Seam &seam)
         value = (value - startB) / spanB;
     }
 
+    // Lined up by their notches: with as many on both parts, the n-th notch of one meets the n-th of the other, and
+    // between notches the points share the length out evenly (the ease goes where the pattern puts it).
+    const auto notchesIn = [](const QVector<double> &notches, double start, double end, bool reversed)
+    {
+        QVector<float> result;
+        for (const double notch : notches)
+        {
+            const double at = reversed ? 1.0 - notch : notch;
+            const double from = reversed ? 1.0 - end : start;
+            const double span = qMax(1e-9, end - start);
+            const double inPart = (at - from) / span;
+            if (inPart > 0.01 && inPart < 0.99)
+            {
+                result.append(static_cast<float>(inPart));
+            }
+        }
+        std::sort(result.begin(), result.end());
+        return result;
+    };
+    const QVector<float> notchesA = notchesIn(panelA.edgeNotches(seam.edgeA), seam.startA, seam.endA, false);
+    const QVector<float> notchesB = notchesIn(panelB.edgeNotches(seam.edgeB), seam.startB, seam.endB, seam.reversed);
+    if (!notchesA.isEmpty() && notchesA.size() == notchesB.size())
+    {
+        QVector<float> knotsA{0.0f};
+        QVector<float> knotsB{0.0f};
+        knotsA << notchesA << 1.0f;
+        knotsB << notchesB << 1.0f;
+        for (float &value : sb)
+        {
+            // Where the point lies between B's notches, at the same share between A's.
+            int k = 0;
+            while (k + 2 < knotsB.size() && value > knotsB.at(k + 1))
+            {
+                ++k;
+            }
+            const float span = qMax(1e-6f, knotsB.at(k + 1) - knotsB.at(k));
+            value = knotsA.at(k) + (value - knotsB.at(k)) / span * (knotsA.at(k + 1) - knotsA.at(k));
+        }
+    }
+
     // Each point of one side is held to the point at the same place along the other side, and the other way round.
     const auto link = [this](const QVector<int> &from, const QVector<float> &sFrom, int fromOffset,
                              const QVector<int> &to, const QVector<float> &sTo, int toOffset)

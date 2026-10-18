@@ -257,6 +257,9 @@ private slots:
     void seamFinderSewsYoke();
     void seamFinderSewsCollarPair();
     void sewingByClicking();
+    void sidesMergeTracedCorners();
+    void clothLinesUpNotches();
+    void notchesReachThePanels();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -2354,44 +2357,93 @@ void TST_Seamly3D::arrangementGuessesFromShape()
 //---------------------------------------------------------------------------------------------------------------------
 void TST_Seamly3D::piecesSpreadAndYokes()
 {
-    // Two half fronts side by side (a princess front), and a yoke on top of the back.
-    PatternPiece centre = tshirtBody(1, QStringLiteral("Front panel"), 8);
-    PatternPiece sidePanel = tshirtBody(2, QStringLiteral("Front side panel"), 8);
-    PatternPiece back = tshirtBody(3, QStringLiteral("Back"), 2);
-    PatternPiece yoke = bandPiece(4, QStringLiteral("Back yoke"), 24, 12, true);
+    // A centre back cut on the fold and a side back beside it, listed side first, under a back yoke; two half
+    // fronts listed centre last.
     auto provider = std::make_shared<FakeProvider>();
-    provider->m_pieces = {centre, sidePanel, back, yoke};
+    provider->m_pieces = {bandPiece(1, QStringLiteral("Side back"), 14, 40, false),
+                          bandPiece(2, QStringLiteral("Centre back"), 10, 40, true),
+                          bandPiece(3, QStringLiteral("Back yoke"), 24, 12, true),
+                          bandPiece(4, QStringLiteral("Front side panel"), 12, 50, false),
+                          bandPiece(5, QStringLiteral("Front"), 9, 50, false)};
+    provider->m_pieces[0].quantity = 2;
+    provider->m_pieces[3].quantity = 2;
+    provider->m_pieces[4].quantity = 2;
     PatternPiecesPanel piecesPanel;
     piecesPanel.setProvider(provider);
-    PatternPiecesPanel::Settings s = piecesPanel.settings(2);
-    s.placement = PiecePlacement::Front;
-    piecesPanel.setSettings(2, s);
-    QCOMPARE(piecesPanel.settings(4).placement, PiecePlacement::Back);
+    PatternPiecesPanel::Settings side = piecesPanel.settings(1);
+    side.placement = PiecePlacement::Back;
+    piecesPanel.setSettings(1, side);
+    PatternPiecesPanel::Settings frontSidePanel = piecesPanel.settings(4);
+    QCOMPARE(frontSidePanel.placement, PiecePlacement::LeftSide); // as named; it goes on the front here
+    frontSidePanel.placement = PiecePlacement::Front;
+    piecesPanel.setSettings(4, frontSidePanel);
+    QCOMPARE(piecesPanel.settings(2).placement, PiecePlacement::Back);
+    QCOMPARE(piecesPanel.settings(3).placement, PiecePlacement::Back);
 
     const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
     const QVector<GarmentPanel> panels = piecesPanel.panels(frame);
-    QCOMPARE(panels.size(), 8);
-
-    // The second front starts round the body where the first one ends.
-    const auto angleOf = [](const QVector3D &p) { return std::atan2(p.x(), p.z()); };
-    float firstEnd = 0;
-    float secondStart = 10;
-    for (const QVector3D &p : panels.at(0).shape.positions)
+    QCOMPARE(panels.size(), 10);
+    const auto panelOf = [&panels](quint32 id, int copy)
     {
-        firstEnd = qMax(firstEnd, angleOf(p));
-    }
-    for (const QVector3D &p : panels.at(2).shape.positions)
+        for (const GarmentPanel &panel : panels)
+        {
+            if (panel.pieceId == id && panel.copy == copy)
+            {
+                return panel;
+            }
+        }
+        return GarmentPanel();
+    };
+    // Around the body, from the center line out (radians, either way round).
+    const auto span = [](const GarmentPanel &panel, float centre)
     {
-        secondStart = qMin(secondStart, angleOf(p));
-    }
-    QVERIFY2(qAbs(secondStart - firstEnd) < 0.05f, qPrintable(QStringLiteral("%1 %2").arg(firstEnd).arg(secondStart)));
-    QCOMPARE(piecesPanel.settings(2).adjustment.around, 0.0f); // spread by the arrangement, not moved by hand
+        float from = 10;
+        float to = -10;
+        for (const QVector3D &p : panel.shape.positions)
+        {
+            float angle = std::atan2(p.x(), p.z()) - centre;
+            while (angle > static_cast<float>(M_PI))
+            {
+                angle -= 2 * static_cast<float>(M_PI);
+            }
+            while (angle < -static_cast<float>(M_PI))
+            {
+                angle += 2 * static_cast<float>(M_PI);
+            }
+            from = qMin(from, qAbs(angle));
+            to = qMax(to, qAbs(angle));
+        }
+        return qMakePair(from, to);
+    };
 
-    // The back hangs below the yoke, the yoke where the back would be.
-    const float yokeTop = panels.at(6).shape.bounds().maximum.y();
-    const float backTop = panels.at(4).shape.bounds().maximum.y();
-    QVERIFY(qAbs(yokeTop - frame.neckHeight) < 0.5f);
-    QVERIFY2(qAbs(backTop - (frame.neckHeight - 12)) < 0.5f, qPrintable(QString::number(backTop)));
+    // The piece cut on the fold is on the center back, the side piece beside it, whatever the order of the list.
+    const auto centreBack = span(panelOf(2, 0), static_cast<float>(M_PI));
+    const auto sideBack = span(panelOf(1, 0), static_cast<float>(M_PI));
+    QVERIFY(centreBack.first < 0.02f);
+    QVERIFY2(qAbs(sideBack.first - centreBack.second) < 0.02f,
+             qPrintable(QStringLiteral("%1 %2").arg(centreBack.second).arg(sideBack.first)));
+    // The front, named neither centre nor side, goes before the side panel.
+    const auto front = span(panelOf(5, 0), 0);
+    const auto frontSide = span(panelOf(4, 0), 0);
+    QVERIFY(front.first < 0.02f);
+    QVERIFY(qAbs(frontSide.first - front.second) < 0.02f);
+    QCOMPARE(piecesPanel.settings(1).adjustment.around, 0.0f); // spread by the arrangement, not moved by hand
+    QCOMPARE(PieceArrangement::centerFirst(provider->m_pieces.at(1)), 0);
+    QCOMPARE(PieceArrangement::centerFirst(provider->m_pieces.at(0)), 4);
+    QCOMPARE(PieceArrangement::centerFirst(provider->m_pieces.at(4)), 2);
+
+    // The backs hang below the yoke, the yoke where the backs would be; and it is sewn to both.
+    QVERIFY(qAbs(panelOf(3, 0).shape.bounds().maximum.y() - frame.neckHeight) < 0.5f);
+    QVERIFY(qAbs(panelOf(2, 0).shape.bounds().maximum.y() - (frame.neckHeight - 12)) < 0.5f);
+    int yokeParts = 0;
+    for (const Seam &seam : SeamFinder::find(panels))
+    {
+        if (panels.at(seam.panelA).pieceId == 3 && panels.at(seam.panelB).pieceId != 3)
+        {
+            ++yokeParts;
+        }
+    }
+    QCOMPARE(yokeParts, 4);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -2636,6 +2688,121 @@ void TST_Seamly3D::sewingByClicking()
     QCOMPARE(read.added.at(0).endB, 0.75);
     QVERIFY(part.key() != SeamSpec().key());
     QCOMPARE(SeamSpec().key(), QStringLiteral("0:0:0-0:0:0@0.000")); // as before: files keep their keys
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::sidesMergeTracedCorners()
+{
+    // A 20 cm square whose top right corner is rounded (radius 4 mm, traced point by point, as imported files are),
+    // with a 5 mm step in its top edge, and two darts legs' ends 3 cm apart at the bottom.
+    QPolygonF outline;
+    outline << QPointF(0, 0) << QPointF(8, 0) << QPointF(8, 0.5) << QPointF(12, 0.5);
+    for (int i = 0; i <= 8; ++i)
+    {
+        const double a = M_PI / 2 * i / 8;
+        outline << QPointF(19.6 + 0.4 * std::sin(a), 0.9 - 0.4 * std::cos(a));
+    }
+    outline << QPointF(20, 20) << QPointF(11.5, 20) << QPointF(10, 14) << QPointF(8.5, 20) << QPointF(0, 20);
+    QVector<int> all;
+    for (int i = 0; i < outline.size(); ++i)
+    {
+        all << i;
+    }
+    const QVector<int> sides = PieceMesher::sides(outline, all);
+    // Corners: top left, the step (one), the rounded corner (one), bottom right, the dart (both legs and its point),
+    // bottom left.
+    QCOMPARE(sides.size(), 8);
+    int rounded = 0;
+    for (const int corner : sides)
+    {
+        if (outline.at(corner).x() > 19 && outline.at(corner).y() < 1)
+        {
+            ++rounded;
+        }
+    }
+    QCOMPARE(rounded, 1);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothLinesUpNotches()
+{
+    // A 40 cm edge with a notch a quarter down it, sewn to a 44 cm edge with one halfway: the notches meet.
+    GarmentPanel a = rectanglePanel(20, 40);
+    GarmentPanel b = rectanglePanel(20, 44);
+    const auto vertexAt = [](const GarmentPanel &panel, int edge, float y)
+    {
+        for (const int v : panel.edgeVertices(edge))
+        {
+            if (qAbs(panel.rest.positions.at(v).y() - y) < 0.01f)
+            {
+                return v;
+            }
+        }
+        return -1;
+    };
+    const int notchA = vertexAt(a, 1, 10);
+    const int notchB = vertexAt(b, 3, 22);
+    QVERIFY(notchA >= 0 && notchB >= 0);
+    a.notches = {notchA};
+    b.notches = {notchB};
+    QCOMPARE(a.edgeNotches(1), QVector<double>{0.25});
+    QCOMPARE(b.edgeNotches(3), QVector<double>{0.5});
+    for (QVector3D &p : a.shape.positions)
+    {
+        p = QVector3D(p.x() - 30, 100 - p.y(), 0);
+    }
+    for (QVector3D &p : b.shape.positions)
+    {
+        p = QVector3D(p.x(), 100 - p.y(), 0);
+    }
+    Seam seam;
+    seam.panelA = 0;
+    seam.edgeA = 1; // down the right of A
+    seam.panelB = 1;
+    seam.edgeB = 3; // up the left of B
+    seam.reversed = true;
+    ClothSettings settings;
+    settings.gravity = 0;
+    ClothSimulator simulator;
+    simulator.setSettings(settings);
+    simulator.setGarment({a, b}, {seam});
+    for (int frame = 0; frame < 60; ++frame)
+    {
+        simulator.step();
+    }
+    const QVector<GarmentPanel> sewn = simulator.panels();
+    const float apart = (sewn.at(0).shape.positions.at(notchA) - sewn.at(1).shape.positions.at(notchB)).length();
+    QVERIFY2(apart < 1.0f, qPrintable(QString::number(static_cast<double>(apart))));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::notchesReachThePanels()
+{
+    PatternPiece front = tshirtBody(1, QStringLiteral("Front"), 8);
+    // A notch on the side seam, a third of the way down it.
+    const int side = front.corners.at(Side);
+    const QPointF from = front.seamLine.at(side);
+    const QPointF to = front.seamLine.at(front.corners.at(Side + 1));
+    front.seamLine.insert(side + 1, from + (to - from) / 3);
+    for (int &corner : front.corners)
+    {
+        corner += corner > side ? 1 : 0;
+    }
+    front.notches = {side + 1};
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {front};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 2);
+    QCOMPARE(panels.at(0).notches.size(), 1);
+    const QVector<double> onSide = panels.at(0).edgeNotches(Side);
+    QCOMPARE(onSide.size(), 1);
+    QVERIFY2(qAbs(onSide.at(0) - 1.0 / 3) < 0.05, qPrintable(QString::number(onSide.at(0))));
+
+    const Viewport3D::LineSet ticks = PatternPiecesPanel::notchLines(panels);
+    QCOMPARE(ticks.segments.size(), 4); // one tick on each copy
+    QVERIFY(qAbs((ticks.segments.at(1) - ticks.segments.at(0)).length() - 1.5f) < 1e-3f);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -3877,7 +4044,9 @@ void TST_Seamly3D::fitMapsOnSphere()
     const auto drape = [&cloth](const QString &fabric)
     {
         auto simulator = std::make_unique<ClothSimulator>();
-        simulator->setSettings(FabricPreset::preset(fabric).apply(ClothSettings()));
+        ClothSettings settings = FabricPreset::preset(fabric).apply(ClothSettings());
+        settings.substeps = 10; // a cloth lying on a ball needs no waistband's stiffness; quicker under ASan
+        simulator->setSettings(settings);
         simulator->setBody(sphereMesh(QVector3D(0, 100, 0), 20));
         simulator->setGarment({cloth}, {});
         for (int frame = 0; frame < 60; ++frame)

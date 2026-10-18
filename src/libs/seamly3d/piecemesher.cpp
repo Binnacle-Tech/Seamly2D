@@ -365,17 +365,27 @@ double PieceMesher::turningAngle(const QPolygonF &outline, int index, double win
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-QVector<int> PieceMesher::sides(const QPolygonF &outline, const QVector<int> &corners, double minAngle, double window)
+QVector<int> PieceMesher::sides(const QPolygonF &outline, const QVector<int> &corners, double minAngle, double window,
+                                double merge)
 {
-    QVector<int> result;
+    struct Sharp
+    {
+        int    index;
+        double angle;
+    };
+    QVector<Sharp> sharp;
     int sharpest = -1;
     double sharpestAngle = -1;
     for (const int corner : corners)
     {
+        if (corner < 0 || corner >= outline.size())
+        {
+            continue;
+        }
         const double angle = turningAngle(outline, corner, window);
         if (angle > minAngle)
         {
-            result.append(corner);
+            sharp.append({corner, angle});
         }
         if (angle > sharpestAngle)
         {
@@ -383,11 +393,58 @@ QVector<int> PieceMesher::sides(const QPolygonF &outline, const QVector<int> &co
             sharpest = corner;
         }
     }
-    if (result.isEmpty() && sharpest >= 0)
+    QVector<int> result;
+    if (sharp.isEmpty())
     {
-        result.append(sharpest);
+        if (sharpest >= 0)
+        {
+            result.append(sharpest);
+        }
+        return result;
+    }
+    std::sort(sharp.begin(), sharp.end(), [](const Sharp &a, const Sharp &b) { return a.index < b.index; });
+
+    // Along the outline from each sharp point to the next (around the end back to the first).
+    const int count = static_cast<int>(outline.size());
+    const auto gap = [&outline, count](int from, int to)
+    {
+        double length = 0;
+        for (int i = from; i != to; i = (i + 1) % count)
+        {
+            length += QLineF(outline.at(i), outline.at((i + 1) % count)).length();
+        }
+        return length;
+    };
+
+    // Runs of sharp points closer than merge to the one before: start a run after a long gap, so a run is not split
+    // where the outline begins.
+    const int n = static_cast<int>(sharp.size());
+    int first = 0;
+    for (int k = 0; k < n; ++k)
+    {
+        if (gap(sharp.at((k + n - 1) % n).index, sharp.at(k).index) >= merge || n == 1)
+        {
+            first = k;
+            break;
+        }
+    }
+    Sharp best = sharp.at(first);
+    for (int step = 1; step <= n; ++step)
+    {
+        const int k = (first + step) % n;
+        const Sharp &current = sharp.at(k);
+        if (step == n || gap(sharp.at((k + n - 1) % n).index, current.index) >= merge)
+        {
+            result.append(best.index); // the run ended: keep its sharpest point
+            best = current;
+        }
+        else if (current.angle > best.angle)
+        {
+            best = current;
+        }
     }
     std::sort(result.begin(), result.end());
+    result.erase(std::unique(result.begin(), result.end()), result.end());
     return result;
 }
 

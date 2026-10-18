@@ -337,6 +337,7 @@ void Workspace3DWindow::showSeamLines()
             colors.fill(QColor(150, 150, 150)); // grayed, so the edges picked stand out
         }
         lines = PatternPiecesPanel::seamLines(panels, seams, colors);
+        lines.append(PatternPiecesPanel::notchLines(panels));
     }
     for (const auto &edge : highlighted)
     {
