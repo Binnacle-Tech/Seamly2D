@@ -429,7 +429,11 @@ reader is used, not its name.
   and add an allowance.
 * **The wizard:** choose the file, check the pieces and their names (with a
   preview of each converted piece), choose units and options, then pick
-  where to save. The pattern opens when you're done.
+  where to save. The pattern opens when you're done. Double-click a piece's
+  name or quantity to change it: the quantity read from the file (1 when
+  the file says nothing) is how many are cut, and it goes into the piece's
+  label. In the 3D workspace, a piece cut 2 or more times starts as a
+  mirrored pair.
 * Binary DXF isn't supported: save it as ASCII DXF first. Patterns split
   across printed pages (tiled PDFs) have to be assembled first.
 

@@ -31,6 +31,7 @@
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QTableWidget>
 #include <QTreeWidget>
 #include <QVector2D>
 #include <QDomDocument>
@@ -3908,6 +3909,15 @@ void TST_Seamly3D::dxfImportWizardConverts()
     QCOMPARE(wizard.pattern().pieces.size(), 2);
     QCOMPARE(wizard.options().sourceUnit, QStringLiteral("mm"));
     QCOMPARE(wizard.options().targetUnit, QStringLiteral("inch")); // Seamly2D's units by default
+    // The quantity can be changed per piece: 1 to 99.
+    auto *table = wizard.findChild<QTableWidget *>();
+    QVERIFY(table != nullptr);
+    QTableWidgetItem *quantity = table->item(0, 2);
+    QVERIFY(quantity->flags().testFlag(Qt::ItemIsEditable));
+    QCOMPARE(quantity->data(Qt::EditRole).toInt(), wizard.pattern().pieces.at(0).quantity);
+    quantity->setData(Qt::EditRole, 4);
+    QCOMPARE(wizard.options().quantities.value(0), 4);
+    QCOMPARE(DxfPatternConverter::prepare(wizard.pattern(), wizard.options()).constFirst().quantity, 4);
     wizard.next();
     wizard.next(); // save page: next to the DXF, with its name
     QCOMPARE(wizard.outputFileName(), dir.filePath(QStringLiteral("shirt.val")));
@@ -3918,7 +3928,9 @@ void TST_Seamly3D::dxfImportWizardConverts()
     QVERIFY(converted.constFirst().at(1).toBool());
     QFile result(dir.filePath(QStringLiteral("shirt.val")));
     QVERIFY(result.open(QIODevice::ReadOnly));
-    QVERIFY(result.readAll().contains("<unit>inch</unit>"));
+    const QByteArray written = result.readAll();
+    QVERIFY(written.contains("<unit>inch</unit>"));
+    QVERIFY(written.contains("quantity=\"4\""));
 
     // A file that is not a DXF stays on the first page.
     DxfImportWizard other(QStringLiteral("cm"));

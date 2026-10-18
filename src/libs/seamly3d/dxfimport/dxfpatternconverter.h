@@ -62,6 +62,7 @@ struct DxfImportOptions
     double        cornerAngle{30};                  ///< degrees
     QVector<bool> include{};                        ///< per piece; empty: every piece
     QStringList   names{};                          ///< per piece; empty or blank: the piece's own name
+    QVector<int>  quantities{};                     ///< per piece, how many are cut; empty or 0: as in the file
     QString       description{};                    ///< written in the pattern's description
     QString       patternName{};
 };

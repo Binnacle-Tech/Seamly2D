@@ -45,7 +45,9 @@
 #include <QPainterPath>
 #include <QPushButton>
 #include <QRadioButton>
+#include <QSpinBox>
 #include <QSplitter>
+#include <QStyledItemDelegate>
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -70,6 +72,22 @@ enum PieceColumn
 };
 
 QString lastDirectory; // where the last DXF was opened, for this session
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Edits how many of a piece are cut: 1 to 99. */
+class QuantityDelegate : public QStyledItemDelegate
+{
+public:
+    using QStyledItemDelegate::QStyledItemDelegate;
+
+    QWidget *createEditor(QWidget *parent, const QStyleOptionViewItem &, const QModelIndex &) const override
+    {
+        auto *editor = new QSpinBox(parent);
+        editor->setRange(1, 99);
+        editor->setFrame(false);
+        return editor;
+    }
+};
 
 //---------------------------------------------------------------------------------------------------------------------
 QString unitName(const QString &unit)
@@ -520,6 +538,7 @@ DxfImportWizard::DxfImportWizard(const QString &patternUnit, QWidget *parent)
 
     m_piecesTable->setColumnCount(PieceColumnCount);
     m_piecesTable->setHorizontalHeaderLabels({tr("Convert"), tr("Name"), tr("Quantity"), tr("Contents")});
+    m_piecesTable->setItemDelegateForColumn(QuantityColumn, new QuantityDelegate(m_piecesTable));
     m_piecesTable->verticalHeader()->hide();
     m_piecesTable->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_piecesTable->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -665,8 +684,10 @@ void DxfImportWizard::fillPieces()
         include->setCheckState(Qt::Checked);
         m_piecesTable->setItem(row, IncludeColumn, include);
         m_piecesTable->setItem(row, NameColumn, new QTableWidgetItem(piece.name));
-        auto *quantity = new QTableWidgetItem(QString::number(piece.quantity));
-        quantity->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        auto *quantity = new QTableWidgetItem;
+        quantity->setData(Qt::EditRole, qMax(1, piece.quantity));
+        quantity->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable | Qt::ItemIsEditable);
+        quantity->setToolTip(tr("How many are cut (double-click to change). Two or more: a pair, mirrored."));
         m_piecesTable->setItem(row, QuantityColumn, quantity);
 
         QStringList contents;
@@ -733,8 +754,10 @@ DxfImportOptions DxfImportWizard::options() const
     {
         const QTableWidgetItem *include = m_piecesTable->item(row, IncludeColumn);
         const QTableWidgetItem *name = m_piecesTable->item(row, NameColumn);
+        const QTableWidgetItem *quantity = m_piecesTable->item(row, QuantityColumn);
         options.include.append(include != nullptr && include->checkState() == Qt::Checked);
         options.names.append(name != nullptr ? name->text() : QString());
+        options.quantities.append(quantity != nullptr ? qMax(1, quantity->data(Qt::EditRole).toInt()) : 0);
     }
     const QFileInfo dxf(m_dxfFileName);
     options.patternName = m_pattern.styleName.isEmpty() ? dxf.completeBaseName() : m_pattern.styleName;

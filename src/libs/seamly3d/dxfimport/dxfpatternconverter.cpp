@@ -704,7 +704,8 @@ QVector<PreparedPiece> DxfPatternConverter::prepare(const DxfPattern &pattern, c
         piece.source = i;
         const QString name = options.names.value(i).trimmed();
         piece.name = name.isEmpty() ? source.name : name;
-        piece.quantity = source.quantity;
+        const int quantity = options.quantities.value(i, 0);
+        piece.quantity = quantity > 0 ? quantity : source.quantity;
         piece.onFold = source.hasMirrorLine;
 
         // Y up in the file, down in the pattern.
