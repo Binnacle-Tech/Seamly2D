@@ -51,6 +51,8 @@ struct SeamSpec
     bool    reversed{false};
     double  startA{0.0};
     double  endA{1.0};
+    double  startB{0.0};
+    double  endB{1.0};
     bool    added{false}; ///< added by hand; otherwise found automatically
 
     QString key() const;

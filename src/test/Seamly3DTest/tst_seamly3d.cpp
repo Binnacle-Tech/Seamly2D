@@ -69,6 +69,7 @@
 #include "piecearrangement.h"
 #include "piecemesher.h"
 #include "polygontriangulator.h"
+#include "workspace3dwindow.h"
 #include "workspacesetup.h"
 
 using namespace Seamly3D;
@@ -252,6 +253,10 @@ private slots:
     void piecesSpreadAndYokes();
     void piecesNudged();
     void viewportPicksOverlay();
+    void clothSewsPartOfEdge();
+    void seamFinderSewsYoke();
+    void seamFinderSewsCollarPair();
+    void sewingByClicking();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -2443,6 +2448,194 @@ void TST_Seamly3D::viewportPicksOverlay()
     QCOMPARE(Viewport3D::pickOverlay(overlays, QVector3D(0.2f, 0.3f, 0), QVector3D(0, 0, -1), &distance), 0);
     QCOMPARE(Viewport3D::pickOverlay(overlays, QVector3D(3, 0, 10), QVector3D(0, 0, -1)), -1); // beside them
     QCOMPARE(Viewport3D::pickOverlay(overlays, QVector3D(0, 0, 10), QVector3D(0, 0, 1)), -1);   // behind the camera
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothSewsPartOfEdge()
+{
+    // A 20 cm edge sewn to the middle half of a 40 cm one: its ends meet the points at 25% and 75% of it.
+    GarmentPanel shortPanel = rectanglePanel(20, 20);
+    GarmentPanel longPanel = rectanglePanel(20, 40);
+    for (QVector3D &p : shortPanel.shape.positions)
+    {
+        p = QVector3D(p.x() - 30, 100 - p.y() - 10, 0); // to the left, level with the middle of the long edge
+    }
+    for (QVector3D &p : longPanel.shape.positions)
+    {
+        p = QVector3D(p.x(), 100 - p.y(), 0);
+    }
+    Seam seam;
+    seam.panelA = 0;
+    seam.edgeA = 1;  // the short piece's right edge, top to bottom
+    seam.panelB = 1;
+    seam.edgeB = 3;  // the long piece's left edge, bottom to top
+    seam.reversed = true;
+    seam.startB = 0.25;
+    seam.endB = 0.75;
+
+    ClothSettings settings;
+    settings.gravity = 0;
+    ClothSimulator simulator;
+    simulator.setSettings(settings);
+    simulator.setGarment({shortPanel, longPanel}, {seam});
+    for (int frame = 0; frame < 45; ++frame)
+    {
+        simulator.step();
+    }
+    QVERIFY(simulator.isSewn());
+    QVERIFY2(simulator.maxSeamGap() < 0.5f, qPrintable(QString::number(simulator.maxSeamGap())));
+    const QVector<GarmentPanel> sewn = simulator.panels();
+    const QVector<int> a = sewn.at(0).edgeVertices(1);
+    const QVector<int> b = sewn.at(1).edgeVertices(3);
+    // The long edge runs from y = 40 up to 0 as drawn: 25% along it is 30 cm down, 75% is 10 cm down.
+    const auto pointAt = [&sewn, &b](double down)
+    {
+        for (const int v : b)
+        {
+            if (qAbs(sewn.at(1).rest.positions.at(v).y() - static_cast<float>(down)) < 0.01f)
+            {
+                return sewn.at(1).shape.positions.at(v);
+            }
+        }
+        return QVector3D(1e9f, 0, 0);
+    };
+    QVERIFY((sewn.at(0).shape.positions.at(a.constFirst()) - pointAt(10)).length() < 1.0f);
+    QVERIFY((sewn.at(0).shape.positions.at(a.constLast()) - pointAt(30)).length() < 1.0f);
+
+    // Drawn too: the long edge's part only.
+    const QVector<Viewport3D::LineSet> lines = PatternPiecesPanel::seamLines(sewn, {seam}, {Qt::red});
+    float drawn = 0;
+    for (int i = 0; i + 1 < lines.at(1).segments.size(); i += 2)
+    {
+        drawn += (lines.at(1).segments.at(i + 1) - lines.at(1).segments.at(i)).length();
+    }
+    QVERIFY2(qAbs(drawn - 20) < 1.5f, qPrintable(QString::number(static_cast<double>(drawn))));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsYoke()
+{
+    // A back yoke on top of a centre back panel (on the fold) and a side back panel beside it: the yoke's lower edge
+    // is sewn to both panel tops, each taking its share.
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {bandPiece(1, QStringLiteral("Back yoke"), 24, 12, true),
+                          bandPiece(2, QStringLiteral("Centre back"), 10, 40, true),
+                          bandPiece(3, QStringLiteral("Side back"), 14, 40, false)};
+    provider->m_pieces[2].quantity = 2;
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    QCOMPARE(piecesPanel.settings(1).placement, PiecePlacement::Back);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 6);
+
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    int yokeParts = 0;
+    for (const Seam &seam : seams)
+    {
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        if (a.pieceId != 1 && b.pieceId != 1)
+        {
+            continue;
+        }
+        if (a.pieceId == 1 && b.pieceId == 1)
+        {
+            continue; // the yoke's fold
+        }
+        ++yokeParts;
+        QCOMPARE(a.pieceId, quint32(1)); // the yoke takes the panels
+        QCOMPARE(seam.edgeA, 2);         // its lower edge
+        QCOMPARE(seam.edgeB, 0);         // their tops
+        QCOMPARE(a.copy, b.copy);        // on the same side
+        const double share = (seam.endA - seam.startA) * 24;
+        QVERIFY2(qAbs(share - (b.pieceId == 2 ? 10 : 14)) < 0.5, qPrintable(QString::number(share)));
+    }
+    QCOMPARE(yokeParts, 4);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsCollarPair()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          bandPiece(3, QStringLiteral("Upper collar"), 19.5, 4, true),
+                          bandPiece(4, QStringLiteral("Under collar"), 19.5, 4, true)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+
+    // The upper collar along the necklines; the under collar round the upper one, but not along its lower edge
+    // (taken by the neckline), and not to its own other half.
+    int toNeckline = 0;
+    int pairs = 0;
+    for (const Seam &seam : SeamFinder::find(panels))
+    {
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        if (a.pieceId == 3 && (b.pieceId == 1 || b.pieceId == 2))
+        {
+            ++toNeckline;
+        }
+        if (a.pieceId == 4 || b.pieceId == 4)
+        {
+            ++pairs;
+            QVERIFY(a.pieceId != b.pieceId);
+            QCOMPARE(a.copy, b.copy);
+            QVERIFY(!(b.pieceId == 3 && seam.edgeB == 2) && !(a.pieceId == 3 && seam.edgeA == 2));
+        }
+    }
+    QCOMPARE(toNeckline, 4);
+    QCOMPARE(pairs, 6);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::sewingByClicking()
+{
+    // The edge nearest a point clicked on a piece.
+    GarmentPanel panel = rectanglePanel(20, 40);
+    QCOMPARE(Workspace3DWindow::nearestEdge(panel, QVector3D(19, 20, 0)), 1);
+    QCOMPARE(Workspace3DWindow::nearestEdge(panel, QVector3D(10, 39, 0)), 2);
+    QCOMPARE(Workspace3DWindow::nearestEdge(panel, QVector3D(0.5f, 5, 0)), 3);
+
+    // Two edges clicked: sewn, their ends joined the way they lie.
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    piecesPanel.updateSeams(panels);
+    const int before = static_cast<int>(piecesPanel.seams(panels).size());
+    QSignalSpy changed(&piecesPanel, &PatternPiecesPanel::seamsChanged);
+    QVERIFY(panels.at(0).shape.bounds().center().x() * panels.at(3).shape.bounds().center().x() > 0);
+    piecesPanel.sewEdges(0, Neck, 3, Neck); // front and back necklines, same side
+    QCOMPARE(changed.count(), 1);
+    const QVector<Seam> after = piecesPanel.seams(panels);
+    QCOMPARE(after.size(), before + 1);
+    QCOMPARE(after.constLast().edgeA, static_cast<int>(Neck));
+    QVERIFY(!after.constLast().reversed); // both run from the center to the neck point
+    piecesPanel.sewEdges(0, Neck, 0, Neck); // an edge with itself: nothing
+    QCOMPARE(changed.count(), 1);
+
+    QVERIFY(!piecesPanel.isSewingByClicking());
+    QSignalSpy toggled(&piecesPanel, &PatternPiecesPanel::sewingByClickingToggled);
+    piecesPanel.setSewingByClicking(true);
+    QCOMPARE(toggled.count(), 1);
+    QVERIFY(piecesPanel.isSewingByClicking());
+    piecesPanel.setHighlightedEdges({qMakePair(0, Neck)});
+    QCOMPARE(piecesPanel.highlightedEdges().size(), 1);
+
+    // Part of an edge survives the setup file, and is named apart from the whole edge.
+    SeamSpec part;
+    part.startB = 0.25;
+    part.endB = 0.75;
+    WorkspaceSetup setup;
+    setup.added.append(part);
+    WorkspaceSetup read;
+    QVERIFY(WorkspaceSetup::fromJson(setup.toJson(), &read));
+    QCOMPARE(read.added.at(0).startB, 0.25);
+    QCOMPARE(read.added.at(0).endB, 0.75);
+    QVERIFY(part.key() != SeamSpec().key());
+    QCOMPARE(SeamSpec().key(), QStringLiteral("0:0:0-0:0:0@0.000")); // as before: files keep their keys
 }
 
 //---------------------------------------------------------------------------------------------------------------------

@@ -414,13 +414,18 @@ void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used
                 {
                     continue;
                 }
+                // Near the band, and at its height: a neckline drops in front, but the tops of panels hanging below a
+                // yoke are further down.
                 const QVector<int> vertices = panel.edgeVertices(e);
                 bool near = true;
                 for (const int v : vertices)
                 {
                     float distance = 0;
-                    project(panel.shape.positions.at(v), &distance);
-                    near = near && distance <= SeamFinder::bandReach;
+                    const QVector3D &point = panel.shape.positions.at(v);
+                    project(point, &distance);
+                    const float below = lowest - point.y();
+                    near = near && distance <= SeamFinder::bandReach && below <= SeamFinder::bandDrop
+                           && below >= -SeamFinder::bandRise;
                 }
                 const float middle = panel.shape.positions.at(vertices.at(vertices.size() / 2)).x();
                 if (!near || (qAbs(side) > 3.0f && middle * side < 0))
@@ -476,6 +481,222 @@ void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used
             used.insert(qMakePair(part.panel, part.edge));
         }
         used.insert(qMakePair(b, lower));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief Where each point of an edge lies along it, 0 to 1, measured on the flat piece. */
+QVector<double> edgeShares(const GarmentPanel &panel, const QVector<int> &vertices)
+{
+    QVector<double> along(vertices.size(), 0.0);
+    for (int i = 1; i < vertices.size(); ++i)
+    {
+        along[i] = along.at(i - 1) + static_cast<double>((panel.rest.positions.at(vertices.at(i))
+                                                          - panel.rest.positions.at(vertices.at(i - 1)))
+                                                             .length());
+    }
+    const double total = qMax(1e-9, along.constLast());
+    for (double &value : along)
+    {
+        value /= total;
+    }
+    return along;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Sews an edge still open to the open edges of other pieces lying along it, when they are as long as it
+ * together: a yoke's lower edge to the tops of the panels below it. Both are straight, and so were left open as a
+ * hem and as waistlines. Each takes a share of the edge as long as itself, in order along it.
+ */
+void sewOneToMany(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used, QVector<Seam> &seams)
+{
+    struct Open
+    {
+        int    panel;
+        int    edge;
+        double length;
+    };
+    QVector<Open> open;
+    for (int p = 0; p < panels.size(); ++p)
+    {
+        const GarmentPanel &panel = panels.at(p);
+        if (!panel.sewable || panel.band)
+        {
+            continue;
+        }
+        for (int e = 0; e < panel.edgeCount(); ++e)
+        {
+            if (!used.contains(qMakePair(p, e)) && panel.edgeLength(e) >= 2.0)
+            {
+                open.append({p, e, panel.edgeLength(e)});
+            }
+        }
+    }
+    // Longest first: the long edge gathers the short ones, not the other way round.
+    std::sort(open.begin(), open.end(), [](const Open &a, const Open &b) { return a.length > b.length; });
+
+    for (const Open &whole : qAsConst(open))
+    {
+        if (used.contains(qMakePair(whole.panel, whole.edge)))
+        {
+            continue;
+        }
+        const GarmentPanel &panel = panels.at(whole.panel);
+        const QVector<int> line = panel.edgeVertices(whole.edge);
+        const QVector<double> along = edgeShares(panel, line);
+        const auto project = [&panel, &line, &along](const QVector3D &point, float *distance)
+        {
+            int nearest = 0;
+            float best = std::numeric_limits<float>::max();
+            for (int i = 0; i < line.size(); ++i)
+            {
+                const float d = (panel.shape.positions.at(line.at(i)) - point).length();
+                if (d < best)
+                {
+                    best = d;
+                    nearest = i;
+                }
+            }
+            *distance = best;
+            return along.at(nearest);
+        };
+
+        struct Part
+        {
+            int    panel;
+            int    edge;
+            double from;
+            double to;
+            double length;
+        };
+        QVector<Part> parts;
+        double total = 0;
+        for (const Open &other : qAsConst(open))
+        {
+            if (other.panel == whole.panel || used.contains(qMakePair(other.panel, other.edge)))
+            {
+                continue;
+            }
+            const GarmentPanel &otherPanel = panels.at(other.panel);
+            const QVector<int> vertices = otherPanel.edgeVertices(other.edge);
+            bool near = true;
+            float distance = 0;
+            for (const int v : vertices)
+            {
+                project(otherPanel.shape.positions.at(v), &distance);
+                near = near && distance <= SeamFinder::partReach;
+            }
+            if (!near)
+            {
+                continue;
+            }
+            const double from = project(otherPanel.shape.positions.at(vertices.constFirst()), &distance);
+            const double to = project(otherPanel.shape.positions.at(vertices.constLast()), &distance);
+            parts.append({other.panel, other.edge, from, to, other.length});
+            total += other.length;
+        }
+        if (parts.isEmpty() || qAbs(total - whole.length) > SeamFinder::partsTolerance * whole.length)
+        {
+            continue;
+        }
+
+        std::sort(parts.begin(), parts.end(), [](const Part &x, const Part &y)
+                  { return qMin(x.from, x.to) + qMax(x.from, x.to) < qMin(y.from, y.to) + qMax(y.from, y.to); });
+        double at = 0;
+        for (const Part &part : qAsConst(parts))
+        {
+            Seam seam;
+            seam.panelA = whole.panel;
+            seam.edgeA = whole.edge;
+            seam.startA = at;
+            at += part.length / total;
+            seam.endA = qMin(1.0, at);
+            seam.panelB = part.panel;
+            seam.edgeB = part.edge;
+            seam.reversed = part.from > part.to;
+            seams.append(seam);
+            used.insert(qMakePair(part.panel, part.edge));
+        }
+        used.insert(qMakePair(whole.panel, whole.edge));
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Sews a band left over (an under collar) to the band it lies on (the upper collar), edge by edge where both
+ * are open: the same shape, cut twice.
+ */
+void sewBandPairs(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used, QVector<Seam> &seams)
+{
+    for (int q = 0; q < panels.size(); ++q)
+    {
+        const GarmentPanel &over = panels.at(q);
+        if (!over.sewable || !over.band)
+        {
+            continue;
+        }
+        bool sewn = false;
+        for (int e = 0; e < over.edgeCount() && !sewn; ++e)
+        {
+            sewn = used.contains(qMakePair(q, e));
+        }
+        if (sewn)
+        {
+            continue; // sewn on already (to the neckline, the waistline)
+        }
+        for (int p = 0; p < panels.size(); ++p)
+        {
+            const GarmentPanel &under = panels.at(p);
+            // Another piece (not the mirrored copy, the other half of the same collar), on the same side.
+            if (p == q || under.pieceId == over.pieceId || under.copy != over.copy || !under.sewable || !under.band)
+            {
+                continue;
+            }
+            int matched = 0;
+            for (int e = 0; e < over.edgeCount(); ++e)
+            {
+                for (int f = 0; f < under.edgeCount(); ++f)
+                {
+                    if (used.contains(qMakePair(p, f)) || used.contains(qMakePair(q, e)))
+                    {
+                        continue;
+                    }
+                    const double lengthA = over.edgeLength(e);
+                    const double lengthB = under.edgeLength(f);
+                    if (qAbs(lengthA - lengthB) > 0.05 * qMax(lengthA, lengthB))
+                    {
+                        continue;
+                    }
+                    const QVector<int> a = over.edgeVertices(e);
+                    const QVector<int> b = under.edgeVertices(f);
+                    const QVector3D a0 = over.shape.positions.at(a.constFirst());
+                    const QVector3D a1 = over.shape.positions.at(a.constLast());
+                    const QVector3D b0 = under.shape.positions.at(b.constFirst());
+                    const QVector3D b1 = under.shape.positions.at(b.constLast());
+                    const float same = (a0 - b0).length() + (a1 - b1).length();
+                    const float crossed = (a0 - b1).length() + (a1 - b0).length();
+                    if (qMin(same, crossed) > 2 * SeamFinder::partReach)
+                    {
+                        continue;
+                    }
+                    Seam seam;
+                    seam.panelA = q;
+                    seam.edgeA = e;
+                    seam.panelB = p;
+                    seam.edgeB = f;
+                    seam.reversed = crossed < same;
+                    seams.append(seam);
+                    used.insert(qMakePair(q, e));
+                    used.insert(qMakePair(p, f));
+                    ++matched;
+                }
+            }
+            if (matched > 0)
+            {
+                break;
+            }
+        }
     }
 }
 
@@ -637,6 +858,8 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
 
     setInSleeves(panels, edges, used, seams);
     sewOnBands(panels, used, seams);
+    sewBandPairs(panels, used, seams);
+    sewOneToMany(panels, used, seams);
     return seams;
 }
 

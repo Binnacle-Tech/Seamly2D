@@ -44,6 +44,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QTimer>
 #include <QTreeWidget>
 #include <QVBoxLayout>
@@ -116,6 +117,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     , m_findSeamsButton(new QPushButton(tr("Find Seams"), this))
     , m_addSeamButton(new QPushButton(tr("Add Seam..."), this))
     , m_removeSeamButton(new QPushButton(tr("Remove"), this))
+    , m_sewByClickButton(new QPushButton(tr("Sew by Clicking"), this))
     , m_showSeamsCheck(new QCheckBox(tr("Show seams"), this))
     , m_followTimer(new QTimer(this))
     , m_saveTimer(new QTimer(this))
@@ -368,7 +370,12 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     seamButtons->addWidget(m_findSeamsButton);
     seamButtons->addWidget(m_addSeamButton);
     seamButtons->addWidget(m_removeSeamButton);
+    m_sewByClickButton->setCheckable(true);
+    m_sewByClickButton->setToolTip(tr("Click an edge of a piece in 3D, then the edge to sew it to; again for the "
+                                      "next seam. Click the button again to stop."));
+    connect(m_sewByClickButton, &QPushButton::toggled, this, &PatternPiecesPanel::sewingByClickingToggled);
     layout->addLayout(seamButtons);
+    layout->addWidget(m_sewByClickButton);
     layout->addWidget(m_showSeamsCheck);
 
     auto *fabricForm = new QFormLayout;
@@ -1001,6 +1008,8 @@ void PatternPiecesPanel::updateSeams(const QVector<GarmentPanel> &panels)
         spec.reversed = seam.reversed;
         spec.startA = seam.startA;
         spec.endA = seam.endA;
+        spec.startB = seam.startB;
+        spec.endB = seam.endB;
         m_foundSeams.append(spec);
     }
     rebuildSeamList();
@@ -1042,6 +1051,8 @@ QVector<Seam> PatternPiecesPanel::seams(const QVector<GarmentPanel> &panels, QVe
         seam.reversed = spec.reversed;
         seam.startA = spec.startA;
         seam.endA = spec.endA;
+        seam.startB = spec.startB;
+        seam.endB = spec.endB;
         result.append(seam);
         if (colors != nullptr)
         {
@@ -1091,9 +1102,9 @@ void PatternPiecesPanel::rebuildSeamList()
     {
         const int color = number++;
         auto *item = new QTreeWidgetItem(m_seamList);
-        QString text = edgeName(panelIndex(spec.pieceA, spec.copyA), spec.edgeA) + QStringLiteral(" ") + QChar(0x2194) + QStringLiteral(" ")
-                       + edgeName(panelIndex(spec.pieceB, spec.copyB), spec.edgeB);
-        if (spec.endA - spec.startA < 0.999)
+        QString text = edgeName(panelIndex(spec.pieceA, spec.copyA), spec.edgeA) + QStringLiteral(" ")
+                       + QChar(0x2194) + QStringLiteral(" ") + edgeName(panelIndex(spec.pieceB, spec.copyB), spec.edgeB);
+        if (spec.endA - spec.startA < 0.999 || spec.endB - spec.startB < 0.999)
         {
             text += tr(" (part)");
         }
@@ -1127,10 +1138,29 @@ void PatternPiecesPanel::addSeamDialog()
     auto *form = new QFormLayout(&dialog);
     QComboBox *pieces[2];
     QComboBox *edges[2];
+    QSpinBox *from[2];
+    QSpinBox *to[2];
     for (int side = 0; side < 2; ++side)
     {
         pieces[side] = new QComboBox(&dialog);
         edges[side] = new QComboBox(&dialog);
+        // Part of the edge: from and to, in percent of its length along it.
+        from[side] = new QSpinBox(&dialog);
+        to[side] = new QSpinBox(&dialog);
+        from[side]->setRange(0, 99);
+        to[side]->setRange(1, 100);
+        to[side]->setValue(100);
+        for (QSpinBox *spin : {from[side], to[side]})
+        {
+            spin->setSuffix(QStringLiteral(" %"));
+        }
+        from[side]->setToolTip(tr("Sew from this far along the edge"));
+        to[side]->setToolTip(tr("Sew to this far along the edge"));
+        auto *part = new QHBoxLayout;
+        part->addWidget(new QLabel(tr("from"), &dialog));
+        part->addWidget(from[side]);
+        part->addWidget(new QLabel(tr("to"), &dialog));
+        part->addWidget(to[side]);
         for (int p = 0; p < m_seamPanels.size(); ++p)
         {
             const GarmentPanel &panel = m_seamPanels.at(p);
@@ -1141,6 +1171,11 @@ void PatternPiecesPanel::addSeamDialog()
         }
         form->addRow(side == 0 ? tr("Sew:") : tr("To:"), pieces[side]);
         form->addRow(QString(), edges[side]);
+        form->addRow(QString(), part);
+        connect(from[side], QOverload<int>::of(&QSpinBox::valueChanged), &dialog,
+                [side, &from, &to](int value) { to[side]->setValue(qMax(to[side]->value(), value + 1)); });
+        connect(to[side], QOverload<int>::of(&QSpinBox::valueChanged), &dialog,
+                [side, &from, &to](int value) { from[side]->setValue(qMin(from[side]->value(), value - 1)); });
     }
     auto *join = new QComboBox(&dialog);
     join->addItem(tr("Start to start"), false);
@@ -1231,11 +1266,66 @@ void PatternPiecesPanel::addSeamDialog()
     spec.copyB = m_seamPanels.at(b).copy;
     spec.edgeB = edges[1]->currentData().toInt();
     spec.reversed = join->currentData().toBool();
+    spec.startA = from[0]->value() / 100.0;
+    spec.endA = to[0]->value() / 100.0;
+    spec.startB = from[1]->value() / 100.0;
+    spec.endB = to[1]->value() / 100.0;
     if (spec.pieceA == spec.pieceB && spec.copyA == spec.copyB && spec.edgeA == spec.edgeB)
     {
         return; // an edge with itself
     }
     addSeam(spec);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::sewEdges(int panelA, int edgeA, int panelB, int edgeB)
+{
+    if (panelA < 0 || panelB < 0 || panelA >= m_seamPanels.size() || panelB >= m_seamPanels.size()
+        || (panelA == panelB && edgeA == edgeB))
+    {
+        return;
+    }
+    const GarmentPanel &a = m_seamPanels.at(panelA);
+    const GarmentPanel &b = m_seamPanels.at(panelB);
+    if (edgeA < 0 || edgeB < 0 || edgeA >= a.edgeCount() || edgeB >= b.edgeCount())
+    {
+        return;
+    }
+    // The ends meet the way they lie closest.
+    const QVector<int> va = a.edgeVertices(edgeA);
+    const QVector<int> vb = b.edgeVertices(edgeB);
+    const QVector3D a0 = a.shape.positions.at(va.constFirst());
+    const QVector3D a1 = a.shape.positions.at(va.constLast());
+    const QVector3D b0 = b.shape.positions.at(vb.constFirst());
+    const QVector3D b1 = b.shape.positions.at(vb.constLast());
+    SeamSpec spec;
+    spec.pieceA = a.pieceId;
+    spec.copyA = a.copy;
+    spec.edgeA = edgeA;
+    spec.pieceB = b.pieceId;
+    spec.copyB = b.copy;
+    spec.edgeB = edgeB;
+    spec.reversed = (a0 - b1).length() + (a1 - b0).length() < (a0 - b0).length() + (a1 - b1).length();
+    addSeam(spec);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::setHighlightedEdges(const QVector<QPair<int, int>> &edges)
+{
+    m_highlight = edges;
+    emit highlightChanged();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool PatternPiecesPanel::isSewingByClicking() const
+{
+    return m_sewByClickButton->isChecked();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::setSewingByClicking(bool on)
+{
+    m_sewByClickButton->setChecked(on);
 }
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -1286,7 +1376,7 @@ QVector<Viewport3D::LineSet> PatternPiecesPanel::seamLines(const QVector<Garment
         const GarmentPanel &a = panels.at(seam.panelA);
         const GarmentPanel &b = panels.at(seam.panelB);
         result.append(edgeLine(a, seam.edgeA, color, 3.0f, seam.startA, seam.endA));
-        result.append(edgeLine(b, seam.edgeB, color, 3.0f));
+        result.append(edgeLine(b, seam.edgeB, color, 3.0f, seam.startB, seam.endB));
 
         // Ties between the points that meet, as tailors baste.
         Viewport3D::LineSet ties;
@@ -1304,7 +1394,8 @@ QVector<Viewport3D::LineSet> PatternPiecesPanel::seamLines(const QVector<Garment
         {
             const double t = k / 4.0;
             const QVector3D pa = edgePoint(a, va, sa, seam.startA + (seam.endA - seam.startA) * t);
-            const QVector3D pb = edgePoint(b, vb, sb, seam.reversed ? 1 - t : t);
+            const double tb = seam.startB + (seam.endB - seam.startB) * (seam.reversed ? 1 - t : t);
+            const QVector3D pb = edgePoint(b, vb, sb, tb);
             ties.segments << pa << pb;
         }
         result.append(ties);

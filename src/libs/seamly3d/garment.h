@@ -70,7 +70,7 @@ struct GarmentPanel
  * @brief Two edges sewn together. With reversed set, the start of edge A meets the end of edge B.
  *
  * A seam may take only part of edge A, from startA to endA (shares of its length): a sleeve cap is sewn to the front
- * armhole with one part and to the back armhole with the other.
+ * armhole with one part and to the back armhole with the other. Likewise part of edge B, from startB to endB.
  */
 struct Seam
 {
@@ -81,6 +81,8 @@ struct Seam
     bool   reversed{false};
     double startA{0.0};
     double endA{1.0};
+    double startB{0.0}; ///< the part of edge B sewn, in its own direction (whatever reversed says)
+    double endB{1.0};
 };
 
 /**
@@ -99,8 +101,14 @@ struct Seam
  * longer (the ease). The cap's ends meet at the underarm, its middle at the shoulder.
  *
  * Last, waistbands and collars are sewn on: the lower long edge of the band along every edge left open within reach
- * of it (the waistlines of a skirt or trousers, the necklines of a bodice), in order around the body, each edge taking
- * a share of the band as long as itself. Half a band takes only the edges on its side of the body.
+ * of it and at its height (the waistlines of a skirt or trousers, the necklines of a bodice; from bandDrop below to
+ * bandRise above), in order around the body, each edge taking
+ * a share of the band as long as itself. Half a band takes only the edges on its side of the body. A band left over
+ * (an under collar) is sewn round to the band it lies on (the upper collar), edge by edge.
+ *
+ * And an edge still open is sewn to the open edges of other pieces lying along it within partReach, when they are as
+ * long as it together (within partsTolerance): a yoke's lower edge to the tops of the panels below it. Hems and
+ * waistlines are open to this, since both of those are straight.
  */
 class SeamFinder
 {
@@ -111,6 +119,10 @@ public:
     static constexpr double maxDistance = 35.0;     ///< centimeters between the edges once arranged
     static constexpr double closeMiddles = 10.0;    ///< centimeters: two edges curving in this close are sewn
     static constexpr float  bandReach = 20.0f;      ///< centimeters from a band to the edges it is sewn to
+    static constexpr float  bandDrop = 12.0f;       ///< centimeters those edges may go below the band's lower edge
+    static constexpr float  bandRise = 5.0f;        ///< and above it
+    static constexpr float  partReach = 5.0f;       ///< centimeters from an edge to the edges sewn along it
+    static constexpr double partsTolerance = 0.08;  ///< relative: those edges together as long as it
 };
 
 } // namespace Seamly3D

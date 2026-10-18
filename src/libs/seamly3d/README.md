@@ -48,7 +48,7 @@ context on Windows, macOS and Linux.
 | `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body, and runs the sewing and draping. |
 | `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
 | `PieceMesher`, `PieceArrangement`, `BodyFrame`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body (torso, arms, legs, waist, neck) by name or by shape, and moved by hand (`PieceAdjustment`); the panel to arrange them, edit the seams and choose the fabric and fit map. |
-| `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (the piece's sides), and the seams found between those edges: one to one, sleeve caps into armholes, waistbands and collars along waistlines and necklines. |
+| `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (the piece's sides), and the seams found between those edges: one to one, sleeve caps into armholes, waistbands and collars along waistlines and necklines, an under collar to its upper collar, one edge to several (a yoke to the panels below it). |
 | `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric. Gives the stretch and ease of the draped garment. |
 | `FitMap` | Colors for the fit maps and their legend. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
@@ -214,19 +214,30 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   darts. Two edges that both curve in are sewn only when they already lie
   together: the inseams and crotch seams of trousers, but not armholes or
   necklines. A sleeve cap is set into the front and back armholes beside it,
-  with up to 15% ease. Last, each waistband or collar is sewn on: its lower
-  edge along every edge still open within 20 cm of it (the waistlines, the
-  necklines), in order around the body, each edge taking a share of the band
-  as long as itself; half a band takes the edges on its side only. Without a
-  band, necklines and waistlines (a straight top edge) stay open; hems
+  with up to 15% ease. Then each waistband or collar is sewn on: its lower
+  edge along every edge still open within 20 cm of it and at its height
+  (from 12 cm below to 5 cm above: the waistlines, the necklines), in order
+  around the body, each edge taking a share of the band as long as itself;
+  half a band takes the edges on its side only. A second band lying on the
+  first (an under collar on its upper collar) is sewn round to it, edge by
+  edge. Last, an edge still open is sewn to the open edges of other pieces
+  lying along it (within 5 cm) when they are as long as it together (within
+  8%): a yoke's lower edge to the tops of the panels below it. Without
+  these, necklines and waistlines (a straight top edge) stay open; hems
   always do.
 * **Seams list:** every seam, with its color. Uncheck a seam to leave it open;
   **Add Seam...** sews two edges you pick (each listed with its length, and
   shown in yellow in 3D while you choose; the ends that meet are chosen from
-  where they lie, and can be swapped); **Remove** deletes a seam you added or
-  switches off one that was found; **Find Seams** sews every seam found again.
-  Seams you switch off or add are kept when the pieces move. Changing the
-  seams sews and drapes again.
+  where they lie, and can be swapped), or part of them: **from** and **to**,
+  in percent of each edge's length along it; **Remove** deletes a seam you
+  added or switches off one that was found; **Find Seams** sews every seam
+  found again. Seams you switch off or add are kept when the pieces move.
+  Changing the seams sews and drapes again.
+* **Sew by Clicking:** while the button is down, click an edge of a piece in
+  3D (it turns yellow), then the edge to sew it to; the seam is added, its
+  ends joined the way they lie. Go on with the next pair; a click beside the
+  pieces starts the pair again; the button again stops. It works on the
+  pieces as arranged, before they are sewn.
 * **Show seams** draws each seam in 3D as its two edges in its color, with
   ties between the points that meet, on the pieces as arranged and on the
   cloth as it drapes. Selecting a seam in the list shows its edges in yellow.
@@ -329,8 +340,11 @@ Placements are named (`front`, `back`, `left-side`, `right-side`,
 `left-sleeve`, `right-sleeve`, `lower-front`, `lower-back`,
 `left-leg-front`, `left-leg-back`, `right-leg-front`, `right-leg-back`,
 `waistband`, `collar`, `aside`, `hidden`), a piece moved by hand has
-`lift` (cm), `around` and `turn` (degrees), and a seam left open is named
-`pieceA:copyA:edgeA-pieceB:copyB:edgeB@startA`, edges counted from 0. A
+`lift` (cm), `around` and `turn` (degrees), a seam has the part of each edge
+it takes (`startA`, `endA`, `startB`, `endB`, shares of the edge from 0 to
+1), and a seam left open is named
+`pieceA:copyA:edgeA-pieceB:copyB:edgeB@startA`, edges counted from 0, with
+`/startB` after it when only part of edge B is sewn. A
 file from a newer version is read as far as it is understood.
 
 ### Importing SVG and DXF patterns
@@ -417,16 +431,19 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 
 In order, because each one unblocks real patterns rather than test ones:
 
-1. **Sew real patterns:** pick seam edges in 3D or on the 2D pieces, sew
-   part of an edge between notches, and use notches to line seams up. A
-   yoke sewn to several panels, and an under collar to its upper collar,
-   need this (FreeSewing's Devon jacket drapes badly without it).
+1. **Imported outlines in fewer, longer edges:** a curve traced from an SVG
+   or DXF file breaks into many short edges where it turns sharply between
+   points (FreeSewing's Devon yoke has 29), so its lower edge no longer
+   lines up with the panels below it. Together with notches (from the
+   pattern) to line seams up and to split edges where the pattern does.
 2. **Fabric grain:** stretch that differs along the warp, the weft and the
    bias, from the grainline, and a fabric per piece.
 3. **Self collision**, which layered garments, fold-over collars and
    tucked-in shirts need.
 4. **Arrange from the pattern itself:** use grainlines and notches to tell
-   which way a piece goes, two-piece sleeves and front from back by shape.
+   which way a piece goes, two-piece sleeves and front from back by shape,
+   and pieces wider than their place (Devon's three front panels spread
+   past the side seam).
 
 ### 1. Avatar
 
@@ -474,11 +491,13 @@ In order, because each one unblocks real patterns rather than test ones:
   into armholes, waistbands and collars along waistlines and necklines
 - [x] Seams list: switch seams off, add seams between two edges, seam
   lines drawn in 3D
-- [ ] Pick seam edges in 3D or on the 2D pieces
-- [ ] Sew part of an edge (between notches or points), and line seams up
-  by their notches
-- [ ] One edge sewn to several (a yoke to the panels below it), and an
+- [x] Pick seam edges in 3D (Sew by Clicking)
+- [x] Sew part of an edge, of either side (Add Seam, in percent)
+- [x] One edge sewn to several (a yoke to the panels below it), and an
   under collar to its upper collar
+- [ ] Pick seam edges on the 2D pieces too; sew part of an edge between
+  notches or points, and line seams up by their notches
+- [ ] Fewer, longer edges for outlines traced from imported files
 - [ ] Gathers and ease: sew a longer edge into a shorter one on purpose
 - [ ] Cuffs, pockets and facings sewn on; collars that fold over
 - [ ] Openings and closures: button stands that overlap, flies, zips

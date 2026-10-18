@@ -101,6 +101,15 @@ Workspace3DWindow::Workspace3DWindow(QWidget *parent)
                 }
             });
     connect(m_viewport, &Viewport3D::overlayDragged, this, &Workspace3DWindow::pieceDragged);
+    connect(m_viewport, &Viewport3D::overlayClicked, this, &Workspace3DWindow::edgeClicked);
+    connect(m_piecesPanel, &PatternPiecesPanel::sewingByClickingToggled, this,
+            [this](bool on)
+            {
+                m_firstEdge = qMakePair(-1, -1);
+                m_viewport->setOverlayClicksWanted(on);
+                m_piecesPanel->setHighlightedEdges({});
+                m_piecesPanel->setSimulationStatus(on ? tr("Click an edge, then the edge to sew it to.") : QString());
+            });
     connect(m_piecesPanel, &PatternPiecesPanel::highlightChanged, this, &Workspace3DWindow::showSeamLines);
     connect(m_piecesPanel, &PatternPiecesPanel::fitMapChanged, this,
             [this]()
@@ -199,6 +208,66 @@ void Workspace3DWindow::updatePieces()
     m_viewport->setOverlays(PatternPiecesPanel::overlays(m_arranged));
     m_piecesPanel->updateSeams(m_arranged);
     showSeamLines();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Workspace3DWindow::edgeClicked(int index, const QVector3D &point)
+{
+    if (!m_piecesPanel->isSewingByClicking() || !m_simulator.isEmpty())
+    {
+        return;
+    }
+    if (index < 0 || index >= m_arranged.size())
+    {
+        // Beside the pieces: start again.
+        m_firstEdge = qMakePair(-1, -1);
+        m_piecesPanel->setHighlightedEdges({});
+        m_piecesPanel->setSimulationStatus(tr("Click an edge, then the edge to sew it to."));
+        return;
+    }
+    const int edge = nearestEdge(m_arranged.at(index), point);
+    if (edge < 0)
+    {
+        return;
+    }
+    if (m_firstEdge.first < 0)
+    {
+        m_firstEdge = qMakePair(index, edge);
+        m_piecesPanel->setHighlightedEdges({m_firstEdge});
+        m_piecesPanel->setSimulationStatus(tr("Now click the edge to sew it to."));
+        return;
+    }
+    const QPair<int, int> first = m_firstEdge;
+    m_firstEdge = qMakePair(-1, -1);
+    m_piecesPanel->setHighlightedEdges({});
+    m_piecesPanel->sewEdges(first.first, first.second, index, edge);
+    m_piecesPanel->setSimulationStatus(tr("Sewn. Click the next edge, or the button again to stop."));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+int Workspace3DWindow::nearestEdge(const GarmentPanel &panel, const QVector3D &point)
+{
+    int nearest = -1;
+    float best = std::numeric_limits<float>::max();
+    for (int e = 0; e < panel.edgeCount(); ++e)
+    {
+        const QVector<int> vertices = panel.edgeVertices(e);
+        for (int i = 1; i < vertices.size(); ++i)
+        {
+            const QVector3D a = panel.shape.positions.at(vertices.at(i - 1));
+            const QVector3D ab = panel.shape.positions.at(vertices.at(i)) - a;
+            const float t = ab.lengthSquared() > 1e-12f
+                                ? qBound(0.0f, QVector3D::dotProduct(point - a, ab) / ab.lengthSquared(), 1.0f)
+                                : 0.0f;
+            const float distance = (a + ab * t - point).length();
+            if (distance < best)
+            {
+                best = distance;
+                nearest = e;
+            }
+        }
+    }
+    return nearest;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

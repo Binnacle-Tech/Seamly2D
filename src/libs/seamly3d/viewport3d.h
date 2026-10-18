@@ -49,7 +49,7 @@ namespace Seamly3D
  * OpenGL ES 2.0 so it works with the default surface format on every platform Seamly2D supports.
  *
  * Mouse: left drag orbits, right or middle drag (or Shift + left drag) pans, the wheel zooms. With pieces movable,
- * Ctrl + left drag on a piece moves it (overlayDragged).
+ * Ctrl + left drag on a piece moves it (overlayDragged). With clicks wanted, a left click reports what it hit.
  */
 class Viewport3D : public QOpenGLWidget, protected QOpenGLFunctions
 {
@@ -89,6 +89,8 @@ public:
     void        setLines(const QVector<LineSet> &lines);
     const QVector<LineSet> &lines() const;
 
+    /** @brief With clicks wanted, a left click that does not drag reports the overlay clicked (overlayClicked). */
+    void        setOverlayClicksWanted(bool wanted);
     /** @brief With pieces movable, Ctrl + left drag on an overlay reports where to move it. */
     void        setOverlaysMovable(bool movable);
     bool        overlaysMovable() const;
@@ -110,6 +112,8 @@ signals:
     /** @brief A piece was clicked with Ctrl held (to select it), or is being dragged by @p delta from @p point. */
     void overlayPressed(int index);
     void overlayDragged(int index, const QVector3D &point, const QVector3D &delta);
+    /** @brief With clicks wanted: a left click (no drag) on an overlay, or beside them all (-1). */
+    void overlayClicked(int index, const QVector3D &point);
 
 public slots:
     void        setGridVisible(bool visible);
@@ -175,6 +179,8 @@ private:
 
     DragMode    m_dragMode{DragMode::None};
     bool        m_overlaysMovable{false};
+    bool        m_overlayClicksWanted{false};
+    QPoint      m_pressPos{};
     int         m_dragOverlay{-1};
     QVector3D   m_dragPoint{};
     QPoint      m_lastMousePos{};

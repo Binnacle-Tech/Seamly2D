@@ -526,7 +526,14 @@ void ClothSimulator::addSeam(const Seam &seam)
     {
         value = (value - startA) / spanA;
     }
-    const QVector<float> sb = parameters(panelB, b);
+    // Likewise the part of B, from startB to endB in its own direction: in reverse, from 1 - endB to 1 - startB.
+    QVector<float> sb = parameters(panelB, b);
+    const auto startB = static_cast<float>(seam.reversed ? 1.0 - seam.endB : seam.startB);
+    const float spanB = qMax(1e-6f, static_cast<float>(seam.endB - seam.startB));
+    for (float &value : sb)
+    {
+        value = (value - startB) / spanB;
+    }
 
     // Each point of one side is held to the point at the same place along the other side, and the other way round.
     const auto link = [this](const QVector<int> &from, const QVector<float> &sFrom, int fromOffset,

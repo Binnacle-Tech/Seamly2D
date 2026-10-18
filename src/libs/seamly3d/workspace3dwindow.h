@@ -65,6 +65,9 @@ class Workspace3DWindow : public QMainWindow
     Q_OBJECT
 
 public:
+    /** @brief nearestEdge returns the edge of @p panel nearest to @p point (-1 if it has none). */
+    static int  nearestEdge(const GarmentPanel &panel, const QVector3D &point);
+
     explicit Workspace3DWindow(QWidget *parent = nullptr);
     ~Workspace3DWindow() override;
 
@@ -94,6 +97,7 @@ private slots:
     void        showGarment();
     void        seamsChanged();
     void        pieceDragged(int index, const QVector3D &point, const QVector3D &delta);
+    void        edgeClicked(int index, const QVector3D &point);
     void        showSeamLines();
 
 private:
@@ -120,6 +124,7 @@ private:
     QTimer                *m_simulationTimer;
     ClothSimulator         m_simulator{};
     QVector<GarmentPanel>  m_arranged{};   ///< the pieces as arranged, as shown before sewing
+    QPair<int, int>        m_firstEdge{-1, -1}; ///< sewing by clicking: the edge clicked first (panel, edge)
     int                    m_settledFrames{0};
 
     BodySource  m_source{BodySource::Parametric};

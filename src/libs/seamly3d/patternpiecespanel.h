@@ -129,6 +129,15 @@ public:
     /** @brief The seams to sew between @p panels, and the color each is drawn in. */
     QVector<Seam> seams(const QVector<GarmentPanel> &panels, QVector<QColor> *colors = nullptr) const;
     void         addSeam(const SeamSpec &spec);
+    /**
+     * @brief sewEdges adds a seam between two whole edges, by panel and edge number in the panels of the last
+     * updateSeams(), their ends joined the way they lie closest. Does nothing for an edge with itself.
+     */
+    void         sewEdges(int panelA, int edgeA, int panelB, int edgeB);
+    /** @brief Edges shown highlighted, as picked by clicking: panel and edge numbers. */
+    void         setHighlightedEdges(const QVector<QPair<int, int>> &edges);
+    bool         isSewingByClicking() const;
+    void         setSewingByClicking(bool on);
     QVector<SeamSpec> foundSeams() const;
     bool         showSeams() const;
     /** @brief Edges to show highlighted (panel and edge numbers in the panels of the last updateSeams()). */
@@ -150,6 +159,7 @@ signals:
     void highlightChanged();
     void fitMapChanged();
     void setupChanged(); ///< the user changed something kept in the setup file
+    void sewingByClickingToggled(bool on);
 
 public slots:
     void reload();
@@ -201,6 +211,7 @@ private:
     QPushButton *m_findSeamsButton;
     QPushButton *m_addSeamButton;
     QPushButton *m_removeSeamButton;
+    QPushButton *m_sewByClickButton;
     QCheckBox   *m_showSeamsCheck;
     QVector<GarmentPanel>    m_seamPanels{};  ///< panels the seams were last found on
     QVector<SeamSpec>        m_foundSeams{};

@@ -498,6 +498,7 @@ void Viewport3D::destroyOverlayBuffers()
 void Viewport3D::mousePressEvent(QMouseEvent *event)
 {
     m_lastMousePos = event->position().toPoint();
+    m_pressPos = m_lastMousePos;
 
     if (m_overlaysMovable && event->button() == Qt::LeftButton && (event->modifiers() & Qt::ControlModifier))
     {
@@ -574,9 +575,24 @@ void Viewport3D::mouseMoveEvent(QMouseEvent *event)
 //---------------------------------------------------------------------------------------------------------------------
 void Viewport3D::mouseReleaseEvent(QMouseEvent *event)
 {
+    // A click, not a drag: what was clicked.
+    const QPoint position = event->position().toPoint();
+    if (m_overlayClicksWanted && event->button() == Qt::LeftButton && m_dragMode == DragMode::Orbit
+        && (position - m_pressPos).manhattanLength() <= 4)
+    {
+        QVector3D hit;
+        const int index = overlayAt(event->position(), &hit);
+        emit overlayClicked(index, hit);
+    }
     m_dragMode = DragMode::None;
     m_dragOverlay = -1;
     event->accept();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void Viewport3D::setOverlayClicksWanted(bool wanted)
+{
+    m_overlayClicksWanted = wanted;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

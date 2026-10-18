@@ -84,6 +84,8 @@ QJsonObject seamToJson(const SeamSpec &seam)
     object.insert(QStringLiteral("reversed"), seam.reversed);
     object.insert(QStringLiteral("startA"), seam.startA);
     object.insert(QStringLiteral("endA"), seam.endA);
+    object.insert(QStringLiteral("startB"), seam.startB);
+    object.insert(QStringLiteral("endB"), seam.endB);
     return object;
 }
 
@@ -100,6 +102,8 @@ SeamSpec seamFromJson(const QJsonObject &object)
     seam.reversed = object.value(QStringLiteral("reversed")).toBool();
     seam.startA = qBound(0.0, object.value(QStringLiteral("startA")).toDouble(0.0), 1.0);
     seam.endA = qBound(seam.startA, object.value(QStringLiteral("endA")).toDouble(1.0), 1.0);
+    seam.startB = qBound(0.0, object.value(QStringLiteral("startB")).toDouble(0.0), 1.0);
+    seam.endB = qBound(seam.startB, object.value(QStringLiteral("endB")).toDouble(1.0), 1.0);
     seam.added = true;
     return seam;
 }
@@ -109,8 +113,13 @@ SeamSpec seamFromJson(const QJsonObject &object)
 //---------------------------------------------------------------------------------------------------------------------
 QString SeamSpec::key() const
 {
-    return QStringLiteral("%1:%2:%3-%4:%5:%6@%7")
-        .arg(pieceA).arg(copyA).arg(edgeA).arg(pieceB).arg(copyB).arg(edgeB).arg(startA, 0, 'f', 3);
+    QString key = QStringLiteral("%1:%2:%3-%4:%5:%6@%7")
+                      .arg(pieceA).arg(copyA).arg(edgeA).arg(pieceB).arg(copyB).arg(edgeB).arg(startA, 0, 'f', 3);
+    if (startB > 1e-6)
+    {
+        key += QStringLiteral("/%1").arg(startB, 0, 'f', 3); // part of edge B: only then, so older keys still hold
+    }
+    return key;
 }
 
 //---------------------------------------------------------------------------------------------------------------------
