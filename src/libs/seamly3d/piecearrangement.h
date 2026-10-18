@@ -169,8 +169,14 @@ public:
     static bool isYoke(const QString &name);
 
     /**
+     * @brief isUnderSleeve tells the under sleeve of a two-piece sleeve by its name: it goes round the inside of the
+     * arm, below the top sleeve.
+     */
+    static bool isUnderSleeve(const QString &name);
+
+    /**
      * @brief centerFirst orders pieces sharing a place from the center out: cut on the fold (0), named the center
-     * one (1), nothing said (2), named inside (3), named side or outside (4).
+     * or inside one (1), nothing said (2), named side or outside (3).
      */
     static int  centerFirst(const PatternPiece &piece);
 

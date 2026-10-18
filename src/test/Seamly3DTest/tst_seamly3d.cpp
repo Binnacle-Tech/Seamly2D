@@ -260,6 +260,9 @@ private slots:
     void sidesMergeTracedCorners();
     void clothLinesUpNotches();
     void notchesReachThePanels();
+    void sleevesAreMirrorImages();
+    void seamFinderSetsInTwoPieceSleeves();
+    void seamFinderSetsSleeveIntoYokedArmhole();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -1681,6 +1684,122 @@ PatternPiece bandPiece(quint32 id, const QString &name, double length, double wi
     return piece;
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief The height of tshirtSleeve's cap above its underarm line, across it (0 to 34 cm). */
+double sleeveCap(double x)
+{
+    return 12 - 12 * std::sin(M_PI * x / 34);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief The top sleeve of a two-piece sleeve cut from a one-piece sleeve with tshirtSleeve's cap and straight
+ * sides: from the front seam at x = 8 to the back seam at x = 28, 32 cm long. Edges: cap, back seam, hem, front seam.
+ */
+PatternPiece topSleevePiece(quint32 id)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = QStringLiteral("Top sleeve");
+    piece.quantity = 2;
+    QPolygonF &outline = piece.seamLine;
+    piece.corners << 0;
+    for (int i = 0; i < 16; ++i)
+    {
+        const double x = 8 + 20.0 * i / 16;
+        outline << QPointF(x, sleeveCap(x));
+    }
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(28, sleeveCap(28));
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(28, 32);
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(8, 32);
+    return piece;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief The under sleeve that goes with topSleevePiece: the rest of the one-piece sleeve round the underarm, drawn
+ * as patterns draw it, with its front seam on the left like the top sleeve's (so mirrored from the sleeve as worn).
+ * Its cap dips at the underarm. Edges: cap, back seam, hem, front seam.
+ */
+PatternPiece underSleevePiece(quint32 id)
+{
+    PatternPiece piece;
+    piece.id = id;
+    piece.name = QStringLiteral("Under sleeve");
+    piece.quantity = 2;
+    QPolygonF &outline = piece.seamLine;
+    piece.corners << 0;
+    for (int i = 0; i < 14; ++i)
+    {
+        const double x = 8 - 14.0 * i / 14; // from the front seam back round the underarm
+        outline << QPointF(8 - x, sleeveCap(x < 0 ? x + 34 : x));
+    }
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(14, sleeveCap(28));
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(14, 32);
+    piece.corners << static_cast<int>(outline.size());
+    outline << QPointF(0, 32);
+    return piece;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief tshirtBody cut across 12 cm below the shoulder: a yoke (neck, shoulder, armhole, bottom, center) and the
+ * piece below it (armhole, side, hem, center, top). Both on the fold.
+ */
+QVector<PatternPiece> yokedTshirtBody(quint32 id, const QString &name, double neckDrop)
+{
+    constexpr double cut = 12;
+    const auto armhole = [](double a) { return QPointF(19 + 5.5 * (1 - std::cos(a)), 4 + 18 * std::sin(a)); };
+    const double atCut = std::asin((cut - 4) / 18);
+
+    PatternPiece yoke;
+    yoke.id = id;
+    yoke.name = name + QStringLiteral(" yoke");
+    yoke.onFold = true;
+    QPolygonF &top = yoke.seamLine;
+    for (int i = 0; i < 8; ++i)
+    {
+        const double a = M_PI / 2 * i / 8;
+        top << QPointF(7 * std::sin(a), neckDrop * std::cos(a));
+    }
+    yoke.corners << 0 << static_cast<int>(top.size());
+    top << QPointF(7, 0);
+    yoke.corners << static_cast<int>(top.size());
+    for (int i = 0; i < 5; ++i)
+    {
+        top << armhole(atCut * i / 5);
+    }
+    yoke.corners << static_cast<int>(top.size());
+    top << armhole(atCut);
+    yoke.corners << static_cast<int>(top.size());
+    top << QPointF(0, cut);
+
+    PatternPiece below;
+    below.id = id + 1;
+    below.name = name;
+    below.onFold = true;
+    QPolygonF &bottom = below.seamLine;
+    below.corners << 0;
+    for (int i = 0; i < 6; ++i)
+    {
+        bottom << armhole(atCut + (M_PI / 2 - atCut) * i / 6);
+    }
+    below.corners << static_cast<int>(bottom.size());
+    bottom << QPointF(24.5, 22);
+    below.corners << static_cast<int>(bottom.size());
+    bottom << QPointF(24.5, 62);
+    below.corners << static_cast<int>(bottom.size());
+    bottom << QPointF(0, 62);
+    below.corners << static_cast<int>(bottom.size());
+    bottom << QPointF(0, cut);
+    return {yoke, below};
+}
+
 enum BodiceEdge
 {
     Neck,
@@ -2429,7 +2548,7 @@ void TST_Seamly3D::piecesSpreadAndYokes()
     QVERIFY(qAbs(frontSide.first - front.second) < 0.02f);
     QCOMPARE(piecesPanel.settings(1).adjustment.around, 0.0f); // spread by the arrangement, not moved by hand
     QCOMPARE(PieceArrangement::centerFirst(provider->m_pieces.at(1)), 0);
-    QCOMPARE(PieceArrangement::centerFirst(provider->m_pieces.at(0)), 4);
+    QCOMPARE(PieceArrangement::centerFirst(provider->m_pieces.at(0)), 3);
     QCOMPARE(PieceArrangement::centerFirst(provider->m_pieces.at(4)), 2);
 
     // The backs hang below the yoke, the yoke where the backs would be; and it is sewn to both.
@@ -4157,6 +4276,183 @@ void TST_Seamly3D::piecesHaveSides()
     QVERIFY(PieceMesher::turningAngle(outline, 0, 1.0) > 80);
     QVERIFY(PieceMesher::turningAngle(outline, 2, 1.0) < 5);
     QVERIFY(PieceMesher::turningAngle(outline, 5, 1.0) < 10); // the curve leaves along the hem
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::sleevesAreMirrorImages()
+{
+    // A sleeve whose two sides differ (a top sleeve) wraps round the left arm with the left of the pattern (its front
+    // seam) to the front, and its copy on the right arm is its mirror image.
+    const BodyFrame frame = BodyFrame::fromMeasurements(BodyMeasurements());
+    const PatternPiece sleeve = topSleevePiece(1);
+    const Mesh flat = PieceMesher::mesh(sleeve.seamLine, 2.5);
+    const QVector<Mesh> placed = PieceArrangement::place(flat, sleeve.seamLine.boundingRect(),
+                                                         PiecePlacement::LeftSleeve, true, false, frame);
+    QCOMPARE(placed.size(), 2);
+    for (int v = 0; v < flat.positions.size(); ++v)
+    {
+        const QVector3D &left = placed.at(0).positions.at(v);
+        const QVector3D &right = placed.at(1).positions.at(v);
+        QVERIFY(qAbs(left.x() + right.x()) < 1e-3f);
+        QVERIFY(qAbs(left.y() - right.y()) < 1e-3f);
+        QVERIFY(qAbs(left.z() - right.z()) < 1e-3f);
+    }
+    QVERIFY(placed.at(0).positions.at(0).x() > 0); // the corner where the cap meets the front seam
+    QVERIFY(placed.at(0).positions.at(0).z() > 0);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSetsInTwoPieceSleeves()
+{
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          topSleevePiece(3), underSleevePiece(4)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    QCOMPARE(piecesPanel.settings(4).placement, PiecePlacement::LeftSleeve);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 8);
+    const auto panelOf = [&panels](quint32 id, int copy)
+    {
+        for (int p = 0; p < panels.size(); ++p)
+        {
+            if (panels.at(p).pieceId == id && panels.at(p).copy == copy)
+            {
+                return p;
+            }
+        }
+        return -1;
+    };
+    const auto middleOf = [&panels](int p, int edge)
+    {
+        const QVector<int> vertices = panels.at(p).edgeVertices(edge);
+        return panels.at(p).shape.positions.at(vertices.at(vertices.size() / 2));
+    };
+
+    // The under sleeve goes round the inside of the arm: its cap well below the top sleeve's. The front seams of both
+    // are at the front, side by side.
+    for (int copy = 0; copy < 2; ++copy)
+    {
+        const int top = panelOf(3, copy);
+        const int under = panelOf(4, copy);
+        QVERIFY(panels.at(top).sleeve && panels.at(under).sleeve);
+        QVERIFY2(middleOf(top, 0).y() - middleOf(under, 0).y() > 8.0f,
+                 qPrintable(QStringLiteral("%1 %2").arg(middleOf(top, 0).y()).arg(middleOf(under, 0).y())));
+        QVERIFY(middleOf(top, 3).z() > 0 && middleOf(under, 3).z() > 0);
+        QVERIFY((middleOf(top, 3) - middleOf(under, 3)).length() < 5.0f);
+    }
+
+    // Folds, sides and shoulders (6), the front and back seams of each sleeve (4), and each sleeve's opening (top cap
+    // and under cap) shared out round its armhole in four parts.
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    QCOMPARE(seams.size(), 18);
+    for (int copy = 0; copy < 2; ++copy)
+    {
+        const int top = panelOf(3, copy);
+        const int under = panelOf(4, copy);
+        int sleeveSeams = 0;
+        double topCap = 0;
+        double underCap = 0;
+        QHash<int, double> armholes; // shares of each armhole sewn, by panel
+        for (const Seam &seam : seams)
+        {
+            if (seam.panelA == top && seam.panelB == under)
+            {
+                QVERIFY(seam.edgeA == seam.edgeB && (seam.edgeA == 1 || seam.edgeA == 3)); // back with back
+                ++sleeveSeams;
+                continue;
+            }
+            if ((seam.panelA != top && seam.panelA != under) || seam.edgeA != 0)
+            {
+                continue;
+            }
+            QCOMPARE(seam.edgeB, static_cast<int>(Armhole));
+            const GarmentPanel &body = panels.at(seam.panelB);
+            QVERIFY(body.pieceId == 1 || body.pieceId == 2);
+            QVERIFY(body.shape.bounds().center().x() * panels.at(top).shape.bounds().center().x() > 0);
+            (seam.panelA == top ? topCap : underCap) += seam.endA - seam.startA;
+            armholes[seam.panelB] += seam.endB - seam.startB;
+            if (seam.panelA == top && body.pieceId == 1)
+            {
+                // The front of the cap to the front armhole, up to the top of the cap (its highest point) at the
+                // shoulder.
+                QCOMPARE(seam.startA, 0.0);
+                const GarmentPanel &sleeve = panels.at(top);
+                const QVector<int> cap = sleeve.edgeVertices(0);
+                double along = 0;
+                double toTop = 0;
+                float highest = std::numeric_limits<float>::max();
+                for (int i = 0; i < cap.size(); ++i)
+                {
+                    if (i > 0)
+                    {
+                        along += static_cast<double>(
+                            (sleeve.rest.positions.at(cap.at(i)) - sleeve.rest.positions.at(cap.at(i - 1))).length());
+                    }
+                    if (sleeve.rest.positions.at(cap.at(i)).y() < highest)
+                    {
+                        highest = sleeve.rest.positions.at(cap.at(i)).y();
+                        toTop = along;
+                    }
+                }
+                const double total = along;
+                QVERIFY2(qAbs(seam.endA - toTop / total) < 0.03,
+                         qPrintable(QStringLiteral("%1 %2").arg(seam.endA).arg(toTop / total)));
+            }
+        }
+        QCOMPARE(sleeveSeams, 2);
+        QVERIFY(qAbs(topCap - 1) < 1e-6);
+        QVERIFY(qAbs(underCap - 1) < 1e-6);
+        QCOMPARE(armholes.size(), 2);
+        for (const double sewn : qAsConst(armholes))
+        {
+            QVERIFY(qAbs(sewn - 1) < 1e-6);
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSetsSleeveIntoYokedArmhole()
+{
+    // Front and back each in a yoke and a piece below it: the armhole is in four pieces, and the sleeve cap is
+    // shared out round all four, its top at the shoulder.
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = yokedTshirtBody(1, QStringLiteral("Front"), 8) + yokedTshirtBody(3, QStringLiteral("Back"), 2);
+    provider->m_pieces.append(tshirtSleeve(5));
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 10);
+
+    const QVector<Seam> seams = SeamFinder::find(panels);
+    int yokes = 0;
+    QHash<int, int> capParts; // by sleeve panel
+    QHash<int, double> capSewn;
+    for (const Seam &seam : seams)
+    {
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        const quint32 low = qMin(a.pieceId, b.pieceId);
+        if ((low == 1 || low == 3) && qMax(a.pieceId, b.pieceId) == low + 1)
+        {
+            ++yokes; // the yoke's bottom to the top of the piece below
+        }
+        if (a.pieceId == 5 && seam.edgeA == 0)
+        {
+            QVERIFY(b.pieceId >= 1 && b.pieceId <= 4);
+            QCOMPARE(seam.edgeB, b.pieceId % 2 == 1 ? 2 : 0); // the yoke's armhole, or the one below it
+            QVERIFY(b.shape.bounds().center().x() * a.shape.bounds().center().x() > 0);
+            ++capParts[seam.panelA];
+            capSewn[seam.panelA] += seam.endA - seam.startA;
+        }
+    }
+    QCOMPARE(yokes, 4);
+    QCOMPARE(capParts.size(), 2);
+    for (auto it = capParts.cbegin(); it != capParts.cend(); ++it)
+    {
+        QCOMPARE(it.value(), 4);
+        QVERIFY(qAbs(capSewn.value(it.key()) - 1) < 1e-6);
+    }
 }
 
 QTEST_MAIN(TST_Seamly3D)

@@ -501,6 +501,20 @@ bool PieceArrangement::isYoke(const QString &name)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+bool PieceArrangement::isUnderSleeve(const QString &name)
+{
+    const QString n = name.toLower();
+    for (const char *word : {"under", "unter", "lower", "dessous", "onder", "sotto", "inferior", "bajo"})
+    {
+        if (n.contains(QLatin1String(word)))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 int PieceArrangement::centerFirst(const PatternPiece &piece)
 {
     if (piece.onFold)
@@ -519,15 +533,13 @@ int PieceArrangement::centerFirst(const PatternPiece &piece)
         }
         return false;
     };
-    if (has({"center", "centre", "middle", "mitte", "milieu", "medio", "midden", "centrale"}))
+    // The inside panel of a front is the one next to the center ("inside" is not a side).
+    if (has({"center", "centre", "middle", "mitte", "milieu", "medio", "midden", "centrale", "inside", "inner",
+             "innen"}))
     {
         return 1;
     }
     if (has({"outside", "outer", "side", "seite", "côté", "lado", "zij", "fianco"}))
-    {
-        return 4;
-    }
-    if (has({"inside", "inner", "innen"}))
     {
         return 3;
     }
@@ -891,8 +903,12 @@ QVector<Mesh> PieceArrangement::placeAsDrawn(const Mesh &flat, const QRectF &bou
         case PiecePlacement::RightSleeve:
         {
             // A sleeve wraps around a cylinder along the arm: the top of the cap at the shoulder, the hem toward the
-            // wrist, the cap's center line on the outside of the arm.
-            const auto sleeve = [&](PiecePlacement side, float mirror)
+            // wrist, the cap's center line on the outside of the arm, the left of the pattern to the front (a sleeve is
+            // drawn as the left one seen from outside: the front seam of a two-piece sleeve, the lower end of its cap,
+            // on the left).
+            // The other sleeve is its mirror image: the frame round the other arm is mirrored already (out to the
+            // other side, forward still forward), so the pattern wraps round it the same way.
+            const auto sleeve = [&](PiecePlacement side)
             {
                 const float sideSign = side == PiecePlacement::LeftSleeve ? 1.0f : -1.0f;
                 const QVector3D shoulder(sideSign * frame.leftShoulder.x(), frame.leftShoulder.y(),
@@ -909,17 +925,17 @@ QVector<Mesh> PieceArrangement::placeAsDrawn(const Mesh &flat, const QRectF &bou
                 Mesh mesh = flat;
                 for (QVector3D &p : mesh.positions)
                 {
-                    const float phi = mirror * centered(p) / frame.sleeveRadius;
+                    const float phi = -centered(p) / frame.sleeveRadius;
                     const QVector3D around = out * qCos(phi) + forward * qSin(phi);
                     p = axisTop - down * v(p) + around * frame.sleeveRadius;
                 }
                 mesh.computeNormals();
                 return mesh;
             };
-            result.append(sleeve(placement, 1.0f));
+            result.append(sleeve(placement));
             if (pair)
             {
-                result.append(sleeve(opposite(placement), -1.0f));
+                result.append(sleeve(opposite(placement)));
             }
             break;
         }

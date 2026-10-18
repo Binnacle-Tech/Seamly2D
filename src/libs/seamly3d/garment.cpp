@@ -238,7 +238,7 @@ void setInSleeves(const QVector<GarmentPanel> &panels, const QVector<EdgeInfo> &
         {
             caps.append(edge);
         }
-        else if (edge.bulge < -0.5)
+        else if (edge.bulge < -0.5 && !panels.at(edge.panel).sleeve)
         {
             armholes.append(edge);
         }
@@ -537,7 +537,8 @@ QVector<double> edgeShares(const GarmentPanel &panel, const QVector<int> &vertic
  * together: a yoke's lower edge to the tops of the panels below it. Both are straight, and so were left open as a
  * hem and as waistlines. Each takes a share of the edge as long as itself, in order along it.
  */
-void sewOneToMany(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used, QVector<Seam> &seams)
+void sewOneToMany(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used, QVector<Seam> &seams,
+                  bool withSleeves)
 {
     struct Open
     {
@@ -549,7 +550,7 @@ void sewOneToMany(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &us
     for (int p = 0; p < panels.size(); ++p)
     {
         const GarmentPanel &panel = panels.at(p);
-        if (!panel.sewable || panel.band)
+        if (!panel.sewable || panel.band || (panel.sleeve && !withSleeves))
         {
             continue;
         }
@@ -728,6 +729,516 @@ void sewBandPairs(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &us
     }
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief An edge of an opening left in the garment, walked one way round it. */
+struct Stretch
+{
+    int    panel;
+    int    edge;
+    bool   forward; // from its start corner to its end corner
+    double length;  // along the flat piece
+    double offset;  // where it starts, along the opening
+};
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Where a point at a corner of an edge sewn (share 0 or 1 of it) meets the piece it is sewn to: the corner
+ * there, as the panel and the corner's index. False when no seam ends there, or it meets the middle of an edge.
+ */
+bool acrossSeam(const QVector<GarmentPanel> &panels, const QVector<Seam> &seams, int panel, int edge, double share,
+                int *otherPanel, int *otherCorner, int *otherEdge)
+{
+    constexpr double near = 0.02;
+    for (const Seam &seam : seams)
+    {
+        for (int side = 0; side < 2; ++side)
+        {
+            const bool isA = side == 0;
+            if ((isA ? seam.panelA : seam.panelB) != panel || (isA ? seam.edgeA : seam.edgeB) != edge)
+            {
+                continue;
+            }
+            const double start = isA ? seam.startA : seam.startB;
+            const double end = isA ? seam.endA : seam.endB;
+            const bool atStart = qAbs(start - share) < near;
+            if (!atStart && qAbs(end - share) >= near)
+            {
+                continue;
+            }
+            // The start of A's part meets the start of B's part, or its end when reversed.
+            const double otherStart = isA ? seam.startB : seam.startA;
+            const double otherEnd = isA ? seam.endB : seam.endA;
+            const double there = (atStart != seam.reversed) ? otherStart : otherEnd;
+            const int to = isA ? seam.panelB : seam.panelA;
+            const int toEdge = isA ? seam.edgeB : seam.edgeA;
+            if (there > near && there < 1 - near)
+            {
+                return false; // the middle of an edge: a T where three pieces meet
+            }
+            *otherPanel = to;
+            *otherEdge = toEdge;
+            *otherCorner = there < near ? toEdge : (toEdge + 1) % panels.at(to).edgeCount();
+            return true;
+        }
+    }
+    return false;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Walks an opening left in the garment from an open edge: at each corner on along the next open edge, on the
+ * same piece or, across the seams there, on the piece sewn to it. Empty when the walk does not come back round.
+ */
+QVector<Stretch> opening(const QVector<GarmentPanel> &panels, const QVector<Seam> &seams,
+                         const QSet<QPair<int, int>> &open, int panel, int edge)
+{
+    QVector<Stretch> result;
+    Stretch stretch{panel, edge, true, panels.at(panel).edgeLength(edge), 0.0};
+    double offset = 0;
+    for (int steps = 0; steps < 16; ++steps)
+    {
+        stretch.offset = offset;
+        result.append(stretch);
+        offset += stretch.length;
+
+        // The corner it ends at, and the edge on from there.
+        int at = stretch.panel;
+        int from = stretch.edge;
+        int corner = stretch.forward ? (from + 1) % panels.at(at).edgeCount() : from;
+        bool found = false;
+        for (int crossings = 0; crossings < 8; ++crossings)
+        {
+            const int count = panels.at(at).edgeCount();
+            const int next = from == corner ? (corner + count - 1) % count : corner;
+            if (open.contains(qMakePair(at, next)))
+            {
+                stretch = {at, next, next == corner, panels.at(at).edgeLength(next), 0.0};
+                found = true;
+                break;
+            }
+            int otherPanel = 0;
+            int otherCorner = 0;
+            int otherEdge = 0;
+            if (!acrossSeam(panels, seams, at, next, next == corner ? 0.0 : 1.0, &otherPanel, &otherCorner,
+                            &otherEdge))
+            {
+                return {};
+            }
+            at = otherPanel;
+            from = otherEdge;
+            corner = otherCorner;
+        }
+        if (!found)
+        {
+            return {};
+        }
+        if (stretch.panel == panel && stretch.edge == edge)
+        {
+            return stretch.forward ? result : QVector<Stretch>();
+        }
+        for (const Stretch &before : qAsConst(result))
+        {
+            if (before.panel == stretch.panel && before.edge == stretch.edge)
+            {
+                return {}; // round a loop that does not include the start
+            }
+        }
+    }
+    return {};
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/** @brief The point of an opening at a distance along it, as arranged. */
+QVector3D pointAlong(const QVector<GarmentPanel> &panels, const QVector<Stretch> &stretches, double at)
+{
+    const double total = stretches.constLast().offset + stretches.constLast().length;
+    at = std::fmod(std::fmod(at, total) + total, total);
+    for (const Stretch &stretch : stretches)
+    {
+        if (at > stretch.offset + stretch.length && &stretch != &stretches.constLast())
+        {
+            continue;
+        }
+        const GarmentPanel &panel = panels.at(stretch.panel);
+        QVector<int> vertices = panel.edgeVertices(stretch.edge);
+        if (!stretch.forward)
+        {
+            std::reverse(vertices.begin(), vertices.end());
+        }
+        double along = stretch.offset;
+        for (int i = 1; i < vertices.size(); ++i)
+        {
+            const QVector3D &a = panel.rest.positions.at(vertices.at(i - 1));
+            const QVector3D &b = panel.rest.positions.at(vertices.at(i));
+            const auto step = static_cast<double>((b - a).length());
+            if (along + step >= at || i + 1 == vertices.size())
+            {
+                const auto t = static_cast<float>(step > 1e-9 ? qBound(0.0, (at - along) / step, 1.0) : 0.0);
+                return panel.shape.positions.at(vertices.at(i - 1)) * (1 - t)
+                       + panel.shape.positions.at(vertices.at(i)) * t;
+            }
+            along += step;
+        }
+    }
+    return {};
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Sets in sleeves made of pieces sewn together (a top sleeve and an under sleeve): the opening their caps
+ * leave, edge after edge round the top of the sleeve, is sewn into an armhole opening on the same side of the body,
+ * however many pieces either is made of (a yoke and the panels below it). The top of the cap meets the top of the
+ * armhole (the shoulder) and the rest is shared out evenly from there. Only sleeves of at least @p pieces pieces.
+ */
+void setInSleeveOpenings(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used, QVector<Seam> &seams,
+                         int pieces)
+{
+    QSet<QPair<int, int>> open;
+    for (int p = 0; p < panels.size(); ++p)
+    {
+        const GarmentPanel &panel = panels.at(p);
+        if (!panel.sewable || panel.band || panel.edgeCount() < 2)
+        {
+            continue;
+        }
+        for (int e = 0; e < panel.edgeCount(); ++e)
+        {
+            if (!used.contains(qMakePair(p, e)) && !isHem(panel, e) && !isWaistline(panel, e))
+            {
+                open.insert(qMakePair(p, e));
+            }
+        }
+    }
+
+    struct Opening
+    {
+        QVector<Stretch> stretches;
+        double           length;
+        QVector3D        middle; // the average of its points, as arranged
+        bool             sleeve;
+        int              pieces;
+    };
+    QVector<Opening> openings;
+    QSet<QPair<int, int>> walked;
+    for (const QPair<int, int> &start : qAsConst(open))
+    {
+        if (walked.contains(start))
+        {
+            continue;
+        }
+        const QVector<Stretch> stretches = opening(panels, seams, open, start.first, start.second);
+        if (stretches.isEmpty())
+        {
+            continue;
+        }
+        Opening found{stretches, stretches.constLast().offset + stretches.constLast().length, {}, true, 0};
+        QSet<int> panelsIn;
+        bool body = true;
+        int count = 0;
+        for (const Stretch &stretch : stretches)
+        {
+            walked.insert(qMakePair(stretch.panel, stretch.edge));
+            found.sleeve = found.sleeve && panels.at(stretch.panel).sleeve;
+            body = body && !panels.at(stretch.panel).sleeve;
+            panelsIn.insert(stretch.panel);
+            for (const int v : panels.at(stretch.panel).edgeVertices(stretch.edge))
+            {
+                found.middle += panels.at(stretch.panel).shape.positions.at(v);
+                ++count;
+            }
+        }
+        if (!found.sleeve && !body)
+        {
+            continue; // part sleeve, part body: not an opening either way
+        }
+        found.middle /= static_cast<float>(qMax(1, count));
+        found.pieces = static_cast<int>(panelsIn.size());
+        openings.append(found);
+    }
+    // Longest sleeves first.
+    std::sort(openings.begin(), openings.end(), [](const Opening &a, const Opening &b) { return a.length > b.length; });
+
+    QSet<int> taken;
+    for (int c = 0; c < openings.size(); ++c)
+    {
+        const Opening &cap = openings.at(c);
+        if (!cap.sleeve || cap.pieces < pieces || qAbs(cap.middle.x()) < 2.0f)
+        {
+            continue;
+        }
+        double bestScore = std::numeric_limits<double>::max();
+        int best = -1;
+        for (int a = 0; a < openings.size(); ++a)
+        {
+            const Opening &armhole = openings.at(a);
+            // On the same side of the body (not a neckline across the middle).
+            if (armhole.sleeve || taken.contains(a) || armhole.middle.x() * cap.middle.x() <= 0
+                || qAbs(armhole.middle.x()) < 5.0f)
+            {
+                continue;
+            }
+            const double ease = cap.length / armhole.length;
+            const auto reach = static_cast<double>((armhole.middle - cap.middle).length());
+            if (ease < 0.97 || ease > 1.15 || reach > 30.0)
+            {
+                continue;
+            }
+            const double score = qAbs(ease - 1.05) * 10 + reach / 10;
+            if (score < bestScore)
+            {
+                bestScore = score;
+                best = a;
+            }
+        }
+        if (best < 0)
+        {
+            continue;
+        }
+        taken.insert(best);
+        QVector<Stretch> sleeve = cap.stretches;
+        const QVector<Stretch> &armhole = openings.at(best).stretches;
+        const double sleeveLength = cap.length;
+        const double armholeLength = openings.at(best).length;
+
+        // The top of the cap: the highest point, in the pattern, of the longest part of it (the top sleeve's).
+        const Stretch *top = &sleeve.constFirst();
+        for (const Stretch &stretch : qAsConst(sleeve))
+        {
+            top = stretch.length > top->length ? &stretch : top;
+        }
+        double capTop = top->offset;
+        {
+            const GarmentPanel &panel = panels.at(top->panel);
+            QVector<int> vertices = panel.edgeVertices(top->edge);
+            if (!top->forward)
+            {
+                std::reverse(vertices.begin(), vertices.end());
+            }
+            float highest = std::numeric_limits<float>::max();
+            double along = top->offset;
+            for (int i = 0; i < vertices.size(); ++i)
+            {
+                if (i > 0)
+                {
+                    along += static_cast<double>((panel.rest.positions.at(vertices.at(i))
+                                                  - panel.rest.positions.at(vertices.at(i - 1)))
+                                                     .length());
+                }
+                if (panel.rest.positions.at(vertices.at(i)).y() < highest)
+                {
+                    highest = panel.rest.positions.at(vertices.at(i)).y();
+                    capTop = along;
+                }
+            }
+        }
+        // The top of the armhole: its highest point, as arranged (the shoulder).
+        double shoulder = 0;
+        {
+            float highest = std::numeric_limits<float>::lowest();
+            for (double at = 0; at < armholeLength; at += 0.5)
+            {
+                const float y = pointAlong(panels, armhole, at).y();
+                if (y > highest)
+                {
+                    highest = y;
+                    shoulder = at;
+                }
+            }
+        }
+
+        // Both walked the same way round: from the top toward the front, or both toward the back.
+        const auto towardFront = [&panels](const QVector<Stretch> &stretches, double from, double length)
+        {
+            return pointAlong(panels, stretches, from + length / 4).z()
+                   > pointAlong(panels, stretches, from - length / 4).z();
+        };
+        if (towardFront(sleeve, capTop, sleeveLength) != towardFront(armhole, shoulder, armholeLength))
+        {
+            std::reverse(sleeve.begin(), sleeve.end());
+            double offset = 0;
+            for (Stretch &stretch : sleeve)
+            {
+                stretch.forward = !stretch.forward;
+                stretch.offset = offset;
+                offset += stretch.length;
+            }
+            capTop = sleeveLength - capTop;
+        }
+
+        // Shared out evenly from the top: every corner of either opening starts a new seam.
+        const auto share = [](double at, double from, double length)
+        { return std::fmod(std::fmod(at - from, length) + length, length) / length; };
+        QVector<double> breaks{0.0, 1.0};
+        for (const Stretch &stretch : qAsConst(sleeve))
+        {
+            breaks.append(share(stretch.offset, capTop, sleeveLength));
+        }
+        for (const Stretch &stretch : armhole)
+        {
+            breaks.append(share(stretch.offset, shoulder, armholeLength));
+        }
+        std::sort(breaks.begin(), breaks.end());
+        QVector<double> merged;
+        for (const double at : qAsConst(breaks))
+        {
+            if (merged.isEmpty() || at - merged.constLast() > 0.01)
+            {
+                merged.append(at);
+            }
+        }
+        merged.last() = 1.0;
+
+        // Where a share of the way round lies on the stretch the middle of the part is on: a share of that edge.
+        const auto onEdge = [](const QVector<Stretch> &stretches, double from, double length, double middle,
+                               double at0, double at1, double *edge0, double *edge1)
+        {
+            const double m = std::fmod(from + middle * length, length);
+            const Stretch *on = &stretches.constLast();
+            for (const Stretch &stretch : stretches)
+            {
+                if (m < stretch.offset + stretch.length)
+                {
+                    on = &stretch;
+                    break;
+                }
+            }
+            // Measured from the middle of the part, which lies on this stretch (the part may begin at its end, a whole
+            // way round from its start).
+            const double fromMiddle = m - on->offset;
+            const auto local = [&](double at)
+            {
+                double t = qBound(0.0, (fromMiddle + (at - middle) * length) / qMax(1e-9, on->length), 1.0);
+                // At a corner of either opening merged with a point near it on the other: at the corner.
+                t = t < 0.02 ? 0.0 : (t > 0.98 ? 1.0 : t);
+                return on->forward ? t : 1 - t;
+            };
+            *edge0 = local(at0);
+            *edge1 = local(at1);
+            return on;
+        };
+        for (int i = 1; i < merged.size(); ++i)
+        {
+            const double middle = (merged.at(i - 1) + merged.at(i)) / 2;
+            double a0 = 0;
+            double a1 = 0;
+            double b0 = 0;
+            double b1 = 0;
+            const Stretch *partA = onEdge(sleeve, capTop, sleeveLength, middle, merged.at(i - 1), merged.at(i), &a0,
+                                          &a1);
+            const Stretch *partB = onEdge(armhole, shoulder, armholeLength, middle, merged.at(i - 1), merged.at(i),
+                                          &b0, &b1);
+            if (qAbs(a1 - a0) * partA->length < 0.3 || qAbs(b1 - b0) * partB->length < 0.3)
+            {
+                continue;
+            }
+            Seam seam;
+            seam.panelA = partA->panel;
+            seam.edgeA = partA->edge;
+            seam.startA = qMin(a0, a1);
+            seam.endA = qMax(a0, a1);
+            seam.panelB = partB->panel;
+            seam.edgeB = partB->edge;
+            seam.startB = qMin(b0, b1);
+            seam.endB = qMax(b0, b1);
+            seam.reversed = (a0 < a1) != (b0 < b1);
+            seams.append(seam);
+        }
+        for (const Stretch &stretch : qAsConst(sleeve))
+        {
+            used.insert(qMakePair(stretch.panel, stretch.edge));
+        }
+        for (const Stretch &stretch : armhole)
+        {
+            used.insert(qMakePair(stretch.panel, stretch.edge));
+        }
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief Of the seams found edge to edge, those that are two sides of an opening rather than a seam: two edges that
+ * fan out at a sharp corner from the end of another seam between their pieces (the front and back armholes from the
+ * end of the shoulder seam). Two such seams fan out from each other; the one whose edges curve in more is the
+ * opening (the shorter one, if neither does). Returns the indices in @p chosen of those to leave open.
+ */
+QVector<int> fanningOut(const QVector<GarmentPanel> &panels, const QVector<Seam> &seams, const QVector<int> &chosen)
+{
+    // Where each edge's start (0) or end (1) meets the other edge: the seam and the share there.
+    const auto meets = [&seams](int panel, int edge, int end, int *seamIndex, int *otherPanel, int *otherEdge,
+                                int *otherEnd)
+    {
+        for (int i = 0; i < seams.size(); ++i)
+        {
+            const Seam &seam = seams.at(i);
+            if (seam.panelA == seam.panelB)
+            {
+                continue;
+            }
+            const bool isA = seam.panelA == panel && seam.edgeA == edge;
+            const bool isB = seam.panelB == panel && seam.edgeB == edge;
+            if (!isA && !isB)
+            {
+                continue;
+            }
+            *seamIndex = i;
+            *otherPanel = isA ? seam.panelB : seam.panelA;
+            *otherEdge = isA ? seam.edgeB : seam.edgeA;
+            *otherEnd = seam.reversed ? 1 - end : end;
+            return true;
+        }
+        return false;
+    };
+    const auto curvesIn = [&panels](const Seam &seam)
+    { return bulge(panels.at(seam.panelA), seam.edgeA) + bulge(panels.at(seam.panelB), seam.edgeB); };
+
+    QVector<int> result;
+    for (int i = 0; i < seams.size(); ++i)
+    {
+        const Seam &seam = seams.at(i);
+        const GarmentPanel &a = panels.at(seam.panelA);
+        const GarmentPanel &b = panels.at(seam.panelB);
+        if (seam.panelA == seam.panelB || a.edgeCount() < 3 || b.edgeCount() < 3)
+        {
+            continue;
+        }
+        for (int end = 0; end < 2; ++end)
+        {
+            // The corners that meet at this end, and the edges on from them.
+            const int endB = seam.reversed ? 1 - end : end;
+            const int cornerA = (seam.edgeA + end) % a.edgeCount();
+            const int cornerB = (seam.edgeB + endB) % b.edgeCount();
+            const int nextA = end == 0 ? (seam.edgeA + a.edgeCount() - 1) % a.edgeCount() : cornerA;
+            const int nextB = endB == 0 ? (seam.edgeB + b.edgeCount() - 1) % b.edgeCount() : cornerB;
+            int other = 0;
+            int otherPanel = 0;
+            int otherEdge = 0;
+            int otherEnd = 0;
+            // nextA's end at the corner: its end when it comes before, its start when it comes after.
+            if (!meets(seam.panelA, nextA, end == 0 ? 1 : 0, &other, &otherPanel, &otherEdge, &otherEnd)
+                || other == i || otherPanel != seam.panelB || otherEdge != nextB || otherEnd != (endB == 0 ? 1 : 0))
+            {
+                continue;
+            }
+            const double sharp = qDegreesToRadians(150.0);
+            if (cornerAngle(a, cornerA) > sharp || cornerAngle(b, cornerB) > sharp)
+            {
+                continue;
+            }
+            const double inThis = curvesIn(seam);
+            const double inOther = curvesIn(seams.at(other));
+            const bool thisOne = qAbs(inThis - inOther) > 0.2
+                                     ? inThis < inOther
+                                     : a.edgeLength(seam.edgeA) < panels.at(otherPanel).edgeLength(otherEdge);
+            const int victim = chosen.at(thisOne ? i : other);
+            if (!result.contains(victim))
+            {
+                result.append(victim);
+            }
+        }
+    }
+    return result;
+}
+
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -814,7 +1325,11 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
                 const bool alike = qAbs(a.bulge - b.bulge) <= tolerance;
                 const bool bothOut = alike && a.bulge > 0 && b.bulge > 0;
                 const bool bothIn = alike && a.bulge < 0 && b.bulge < 0;
-                if (!bothOut && !(bothIn && middleDistance <= closeMiddles))
+                // Both ends together too: the front and back armholes fan out from the top of the side seam.
+                const auto endsApart = static_cast<double>(
+                    qMin(qMax((a.start - b.start).length(), (a.end - b.end).length()),
+                         qMax((a.start - b.end).length(), (a.end - b.start).length())));
+                if (!bothOut && !(bothIn && middleDistance <= closeMiddles && endsApart <= closeMiddles))
                 {
                     continue;
                 }
@@ -871,23 +1386,45 @@ QVector<Seam> SeamFinder::find(const QVector<GarmentPanel> &panels)
               [](const Candidate &a, const Candidate &b) { return a.score < b.score; });
     QSet<QPair<int, int>> used;
     QVector<Seam> seams;
-    for (const Candidate &candidate : candidates)
+    QSet<int> left; // candidates left open
+    for (int round = 0; round < 4; ++round)
     {
-        const QPair<int, int> a(candidate.seam.panelA, candidate.seam.edgeA);
-        const QPair<int, int> b(candidate.seam.panelB, candidate.seam.edgeB);
-        if (used.contains(a) || used.contains(b))
+        used.clear();
+        seams.clear();
+        QVector<int> chosen;
+        for (int c = 0; c < candidates.size(); ++c)
         {
-            continue;
+            const Seam &seam = candidates.at(c).seam;
+            const QPair<int, int> a(seam.panelA, seam.edgeA);
+            const QPair<int, int> b(seam.panelB, seam.edgeB);
+            if (left.contains(c) || used.contains(a) || used.contains(b))
+            {
+                continue;
+            }
+            used.insert(a);
+            used.insert(b);
+            seams.append(seam);
+            chosen.append(c);
         }
-        used.insert(a);
-        used.insert(b);
-        seams.append(candidate.seam);
+        const int before = static_cast<int>(left.size());
+        for (const int c : fanningOut(panels, seams, chosen))
+        {
+            left.insert(c);
+        }
+        if (left.size() == before)
+        {
+            break;
+        }
     }
 
+    // The body's yokes first, so that an armhole across a yoke and the panels below it is one opening.
+    sewOneToMany(panels, used, seams, false);
+    setInSleeveOpenings(panels, used, seams, 2);
     setInSleeves(panels, edges, used, seams);
+    setInSleeveOpenings(panels, used, seams, 1);
     sewOnBands(panels, used, seams);
     sewBandPairs(panels, used, seams);
-    sewOneToMany(panels, used, seams);
+    sewOneToMany(panels, used, seams, true);
     return seams;
 }
 

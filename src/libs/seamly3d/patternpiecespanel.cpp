@@ -91,6 +91,53 @@ bool spreads(PiecePlacement placement)
     }
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+bool isSleeve(PiecePlacement placement)
+{
+    return placement == PiecePlacement::LeftSleeve || placement == PiecePlacement::RightSleeve;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief How far the ends of a piece's top edge (a sleeve cap) are below its top, on average: centimeters. The top
+ * edge is the one highest up on average.
+ */
+float capEndsDepth(const Mesh &mesh, int outlineCount, const QVector<int> &corners)
+{
+    if (outlineCount < 3 || corners.size() < 2)
+    {
+        return 0;
+    }
+    float top = std::numeric_limits<float>::max();
+    for (int v = 0; v < outlineCount; ++v)
+    {
+        top = qMin(top, mesh.positions.at(v).y());
+    }
+    float highest = std::numeric_limits<float>::max();
+    float depth = 0;
+    for (int e = 0; e < corners.size(); ++e)
+    {
+        const int start = corners.at(e);
+        int end = corners.at((e + 1) % corners.size());
+        if (end <= start)
+        {
+            end += outlineCount;
+        }
+        float sum = 0;
+        for (int v = start; v <= end; ++v)
+        {
+            sum += mesh.positions.at(v % outlineCount).y();
+        }
+        const float mean = sum / static_cast<float>(end - start + 1);
+        if (mean < highest)
+        {
+            highest = mean;
+            depth = (mesh.positions.at(start).y() + mesh.positions.at(end % outlineCount).y()) / 2 - top;
+        }
+    }
+    return depth;
+}
+
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -858,6 +905,56 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
         }
     }
 
+    // A sleeve in two pieces: the under sleeve goes round the inside of the arm, turned to face the top sleeve across
+    // the seams between them (it is drawn as if seen from the other side), and down so that the ends of its cap are
+    // as low as those of the top sleeve's. Named so, or else the narrower of two pieces about as long.
+    QHash<quint32, float> underSleeves; // centimeters down, by piece
+    for (const PiecePlacement place : {PiecePlacement::LeftSleeve, PiecePlacement::RightSleeve})
+    {
+        QVector<const PatternPiece *> sleeve;
+        for (const PatternPiece &piece : m_pieces)
+        {
+            if (settings(piece.id).placement == place)
+            {
+                sleeve.append(&piece);
+            }
+        }
+        QVector<const PatternPiece *> unders;
+        QVector<const PatternPiece *> tops;
+        for (const PatternPiece *piece : qAsConst(sleeve))
+        {
+            (PieceArrangement::isUnderSleeve(piece->name) ? unders : tops).append(piece);
+        }
+        if (unders.isEmpty() && sleeve.size() == 2)
+        {
+            const QRectF a = sleeve.at(0)->seamLine.boundingRect();
+            const QRectF b = sleeve.at(1)->seamLine.boundingRect();
+            if (qAbs(a.height() - b.height()) < 0.25 * qMax(a.height(), b.height()) && a.width() != b.width())
+            {
+                const int under = a.width() < b.width() ? 0 : 1;
+                unders = {sleeve.at(under)};
+                tops = {sleeve.at(1 - under)};
+            }
+        }
+        if (unders.isEmpty() || tops.isEmpty())
+        {
+            continue;
+        }
+        const PatternPiece *top = tops.constFirst();
+        for (const PatternPiece *piece : qAsConst(tops))
+        {
+            top = piece->seamLine.boundingRect().width() > top->seamLine.boundingRect().width() ? piece : top;
+        }
+        const FlatPiece &topFlat = flatPiece(*top);
+        const float topDepth = capEndsDepth(topFlat.mesh, topFlat.outlineCount, topFlat.corners);
+        for (const PatternPiece *piece : qAsConst(unders))
+        {
+            const FlatPiece &flat = flatPiece(*piece);
+            underSleeves.insert(piece->id,
+                                qMax(0.0f, topDepth - capEndsDepth(flat.mesh, flat.outlineCount, flat.corners)));
+        }
+    }
+
     // Several pieces in one place (the panels of a princess bodice, a two-piece sleeve) go side by side around it
     // rather than on top of each other: from the center out, so the piece cut on the fold (or named the center one)
     // is on the center line, and side panels at the side.
@@ -876,7 +973,7 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
     {
         const PatternPiece &piece = m_pieces.at(i);
         const Settings s = settings(piece.id);
-        if (!spreads(s.placement) || PieceArrangement::isYoke(piece.name))
+        if (!spreads(s.placement) || PieceArrangement::isYoke(piece.name) || underSleeves.contains(piece.id))
         {
             continue;
         }
@@ -918,14 +1015,21 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
         const FlatPiece &flat = flatPiece(piece);
 
         PieceAdjustment adjustment = s.adjustment;
-        if (spreads(s.placement) && !PieceArrangement::isYoke(piece.name))
+        bool flip = s.flip;
+        if (underSleeves.contains(piece.id))
+        {
+            adjustment.lift -= underSleeves.value(piece.id);
+            adjustment.around += 180.0f;
+            flip = !flip;
+        }
+        else if (spreads(s.placement) && !PieceArrangement::isYoke(piece.name))
         {
             adjustment.lift -= yokes.value(static_cast<int>(s.placement));
             adjustment.around += spread.value(piece.id);
         }
 
         const QVector<Mesh> placed = PieceArrangement::place(flat.mesh, piece.seamLine.boundingRect(), s.placement,
-                                                             s.pair, s.flip, frame, asideStart, adjustment);
+                                                             s.pair, flip, frame, asideStart, adjustment);
         if (s.placement == PiecePlacement::Aside)
         {
             // Next piece in the row starts after this one (and its mirrored copy), with a gap.
@@ -941,6 +1045,7 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             panel.color = pieceColors[i % (sizeof(pieceColors) / sizeof(pieceColors[0]))];
             panel.sewable = s.placement != PiecePlacement::Aside;
             panel.band = s.placement == PiecePlacement::Waistband || s.placement == PiecePlacement::Collar;
+            panel.sleeve = isSleeve(s.placement);
             panel.rest = flat.mesh;
             panel.shape = placed.at(copy);
             panel.outlineCount = flat.outlineCount;

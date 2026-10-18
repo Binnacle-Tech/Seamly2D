@@ -54,6 +54,7 @@ struct GarmentPanel
     QColor       color{};
     bool         sewable{true};    ///< false for pieces hung beside the body
     bool         band{false};      ///< a waistband or collar: its lower edge is sewn along a waistline or neckline
+    bool         sleeve{false};    ///< a sleeve, or one piece of it: its cap is set into an armhole
     Mesh         rest{};
     Mesh         shape{};
     int          outlineCount{0};
@@ -97,11 +98,17 @@ struct Seam
  * its mirrored copy, the underarm seam of a sleeve. Two edges that both curve in are sewn only when they already lie
  * together (the inseams and crotch seams of trousers): armholes and necklines are left open, as sleeves and collars
  * are eased into them. Two neighbouring edges of the same length meeting at a sharp point are a dart and are sewn
- * closed. Hems (the bottom edge of a piece) and waistlines (a straight top edge) are never sewn.
+ * closed. Hems (the bottom edge of a piece) and waistlines (a straight top edge) are never sewn. Two edges that fan
+ * out at a sharp corner from the end of another seam between their pieces (the front and back armholes from the end
+ * of the shoulder seam) are two sides of an opening: of two such seams, the one that curves in more is left open.
  *
- * Then sleeves are set in: an edge left over that bulges out (a sleeve cap) is sewn to two edges left over that curve
- * in (the front and back armholes) on the same side of the body, when it is as long as both together or up to 15%
- * longer (the ease). The cap's ends meet at the underarm, its middle at the shoulder.
+ * Then the body's yokes are sewn to the panels below them (as last, below), and sleeves are set in. An opening left
+ * in the garment is followed edge by edge, across the seams found: the top of a sleeve (one cap, or a top sleeve's
+ * cap and an under sleeve's), an armhole (in any number of pieces). The top of a sleeve of two pieces or more is sewn
+ * into the armhole opening on its side that it is as long as or up to 15% longer than (the ease): the top of the cap
+ * at the top of the armhole, the rest shared out evenly round both. A one-piece cap (an edge left over that bulges
+ * out) is sewn to two edges left over that curve in (the front and back armholes) in the same way, its ends at the
+ * underarm, its middle at the shoulder; or, when the armhole is in more pieces, as an opening.
  *
  * Last, waistbands and collars are sewn on: the lower long edge of the band along every edge left open within reach
  * of it and at its height (the waistlines of a skirt or trousers, the necklines of a bodice; from bandDrop below to
