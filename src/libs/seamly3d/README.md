@@ -49,7 +49,7 @@ context on Windows, macOS and Linux.
 | `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
 | `PieceMesher`, `PieceArrangement`, `BodyFrame`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body (torso, arms, legs, waist, neck) by name or by shape, and moved by hand (`PieceAdjustment`); the panel to arrange them, edit the seams and choose the fabric and fit map. |
 | `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (the piece's sides), and the seams found between those edges: one to one, sleeves of one piece or two set into armholes of any number of pieces, waistbands and collars along waistlines and necklines, an under collar to its upper collar, one edge to several (a yoke to the panels below it). |
-| `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric. Gives the stretch and ease of the draped garment. |
+| `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric (per piece, along each piece's grain). Gives the stretch and ease of the draped garment. |
 | `FitMap` | Colors for the fit maps and their legend. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
 | `WorkspaceSetup` | What the workspace keeps for a pattern (placements, seams, fabric, fit map), in a `.seamly3d` file next to it. |
@@ -280,14 +280,15 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
 * **Show seams** draws each seam in 3D as its two edges in its color, with
   ties between the points that meet, on the pieces as arranged and on the
   cloth as it drapes, and each notch as a short dark tick into its piece.
-  Selecting a seam in the list shows its edges in yellow.
+  Each piece's grainline is drawn in green through its middle, with an
+  arrowhead at each end. Selecting a seam in the list shows its edges in
+  yellow.
 * **Simulation:** position based dynamics (XPBD) in small steps, 30 per frame,
   each passing four times over the stretch and seam constraints. That many
   steps let a waistline, pressed onto the body, pull itself back up: skirts
   and trousers hang from the waist instead of slipping over the hips (with
   10 steps they slid down). The pieces are solved side by side on all
-  processor cores, and so is the collision with the body. Woven
-  fabrics keep the lengths of the flat piece; knits stretch. Seams pull their
+  processor cores, and so is the collision with the body. Seams pull their
   two edges together at 30 cm/s with gravity off, then gravity drapes the
   garment. No particle moves faster than 225 cm/s: faster, a sleeve sewn
   round the arm whipped round it and tangled at the hem. The body pushes
@@ -299,6 +300,19 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
 * **Fabric:** cotton shirting, linen, denim, cotton jersey, silk, fleece or
   leather. Each has its own stretch, stiffness, weight per square meter,
   friction and thickness. Changing it sews and drapes the garment again.
+* **Fabric grain:** fabric stretches differently along the grainline, across
+  it and on the bias (at 45 degrees). Wovens hardly give along the grain,
+  a little across it and most on the bias; knits give most across. Each
+  edge of the cloth's mesh gives as much as the fabric does in its direction,
+  blended in between. The grain is the piece's grainline in the pattern
+  (between its two anchor points, or at its angle); a piece without one has
+  its grain running down it. Wovens give only a little on the bias here: a
+  skirt cut on the bias with nothing but its own waistline to hold it up
+  slips down the hips with more (a bias skirt needs its waistband).
+* **A fabric per piece:** select a piece and pick its **Fabric** under Turn:
+  "Same as the garment", or any of the fabrics (jersey cuffs on a woven
+  shirt, a denim yoke). The piece stretches, bends and weighs as that
+  fabric; friction, thickness and damping stay the garment's.
 * **Fit map:** colors the draped garment.
   * **Stretch** shows how much longer the fabric is than the flat piece:
     blue where it is pushed together, green where it is relaxed, yellow to
@@ -309,11 +323,10 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
 
 Not there yet: collars that fold over (a collar is a stand, it stays up),
 pockets, cuffs and facings (pieces hung beside the body are not sewn), self
-collision (cloth folding through itself), a fabric per piece, and picking
-seam edges on the 2D pieces. A
-waistline holding a garment up still stretches a few percent (about 4% for
-a skirt and 8% for trousers on the default body) where woven fabric would
-not, so it sits a little low.
+collision (cloth folding through itself), custom fabrics, and picking seam
+edges on the 2D pieces. A waistline holding a garment up still stretches a
+few percent (in cotton, about 5% for a skirt and 10% for trousers on the
+default body) where woven fabric would not, so it sits a little low.
 
 ### The 3D setup is kept with the pattern
 
@@ -322,9 +335,9 @@ named after it: `shirt.val` gets `shirt.seamly3d`. The pattern file and its
 format do not change, so the pattern still opens in any Seamly2D. The file
 keeps:
 
-* where each piece goes, its **Pair** and **Flip** boxes, and how far it was
-  moved by hand (a piece is found again by its id, or by its name if the
-  pattern was rebuilt);
+* where each piece goes, its **Pair** and **Flip** boxes, how far it was
+  moved by hand, and its own fabric if it has one (a piece is found again by
+  its id, or by its name if the pattern was rebuilt);
 * the seams you switched off and the ones you added;
 * the fabric and the fit map.
 
@@ -345,6 +358,7 @@ It is JSON, so it can be read and kept in version control with the pattern:
     "pieces": [
         {
             "around": -10,
+            "fabric": "jersey",
             "flip": true,
             "id": 42,
             "lift": 2.5,
@@ -476,13 +490,12 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 In order, because each one unblocks real patterns rather than test ones.
 FreeSewing's Devon jacket, imported from SVG, now hangs on the body as a
 jacket: yokes, front and back panels, collar, and both two-piece sleeves set
-into armholes made of four pieces each. But:
+into armholes made of four pieces each, each piece stretching along its own
+grain. But:
 
-1. **Fabric grain:** stretch that differs along the warp, the weft and the
-   bias, from the grainline, and a fabric per piece.
-2. **Self collision**, which layered garments, fold-over collars and
+1. **Self collision**, which layered garments, fold-over collars and
    tucked-in shirts need.
-3. **Arrange from the pattern itself:** use grainlines and notches to tell
+2. **Arrange from the pattern itself:** use grainlines and notches to tell
    which way a piece goes, two-piece sleeves and front from back by shape,
    and where a band goes. Devon's "waistband" is the jacket's hem band: with
    nothing open at the waist it takes the pocket openings instead.
@@ -560,10 +573,14 @@ into armholes made of four pieces each. But:
 - [x] Solver on all processor cores (pieces side by side); 30 steps per
   frame so waistbands hold; a speed limit so sleeves do not tangle
 - [ ] Self collision, and collision between garments
-- [ ] Waistlines that hold without stretching (now 4% for a skirt, 8% for
-  trousers): a stiffer solver for long edges under load
-- [ ] Fabric grain: different stretch along the warp, the weft and the bias
-- [ ] A fabric per piece, custom fabrics, kept in the setup file
+- [ ] Waistlines that hold without stretching (now 5% for a skirt, 10% for
+  trousers in cotton): a stiffer solver for long edges under load, so wovens
+  can give more on the bias too
+- [x] Fabric grain: different stretch along the grain, across it and on the
+  bias, from each piece's grainline
+- [x] A fabric per piece, kept in the setup file
+- [ ] Custom fabrics (stretch, weight and drape of your own), kept in the
+  setup file
 - [ ] A smoothed collision body for the finest details
 - [ ] Faster: drape a garment in about a second (now 60 to 90 ms per frame
   on four cores for 4,000 to 6,000 particles, so 3 s of draping takes 5 to

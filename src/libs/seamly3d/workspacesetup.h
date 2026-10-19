@@ -67,6 +67,7 @@ struct PieceSetup
     bool            pair{false};
     bool            flip{false};
     PieceAdjustment adjustment{}; ///< moved by hand
+    QString         fabric{};     ///< a fabric of its own (a preset's id); empty for the garment's
 };
 
 /**

@@ -30,6 +30,7 @@
 #include <QColor>
 #include <QString>
 #include <QVector>
+#include <QVector2D>
 #include <QVector3D>
 
 #include "mesh.h"
@@ -60,6 +61,8 @@ struct GarmentPanel
     int          outlineCount{0};
     QVector<int> corners{};        ///< Outline vertices, increasing
     QVector<int> notches{};        ///< Outline vertices with a notch, increasing
+    QVector2D    grain{0, 1};      ///< The grainline's direction on the flat piece (rest), unit length
+    QString      fabric{};         ///< A fabric preset's id; empty for the garment's fabric
 
     int          edgeCount() const;
     /** @brief edgeVertices returns the outline vertices from corner @p edge to the next corner, both included. */

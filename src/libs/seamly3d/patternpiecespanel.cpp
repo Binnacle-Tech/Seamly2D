@@ -149,6 +149,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     , m_aroundSpin(new QDoubleSpinBox(m_adjustBox))
     , m_turnSpin(new QDoubleSpinBox(m_adjustBox))
     , m_resetAdjustButton(new QPushButton(tr("Put Back"), m_adjustBox))
+    , m_pieceFabricCombo(new QComboBox(m_adjustBox))
     , m_status(new QLabel(this))
     , m_reloadButton(new QPushButton(tr("Reload"), this))
     , m_measurementsButton(new QPushButton(tr("Use Pattern's Measurements"), this))
@@ -240,6 +241,15 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     adjust->addRow(tr("Around:"), m_aroundSpin);
     adjust->addRow(tr("Turn:"), m_turnSpin);
     adjust->addRow(QString(), m_resetAdjustButton);
+    // A fabric of its own: interfacing on a collar, jersey cuffs on a woven shirt.
+    m_pieceFabricCombo->addItem(tr("Same as the garment"), QString());
+    for (const FabricPreset &fabric : FabricPreset::presets())
+    {
+        m_pieceFabricCombo->addItem(fabric.name, fabric.id);
+    }
+    m_pieceFabricCombo->setObjectName(QStringLiteral("seamly3dPieceFabric_ComboBox"));
+    m_pieceFabricCombo->setToolTip(tr("What this piece is made of, if not the garment's fabric"));
+    adjust->addRow(tr("Fabric:"), m_pieceFabricCombo);
     m_adjustBox->setEnabled(false);
     layout->addWidget(m_adjustBox);
     const auto adjusted = [this]()
@@ -275,6 +285,20 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
                 showAdjustment();
                 changed();
                 emit arrangementChanged();
+            });
+    connect(m_pieceFabricCombo, &QComboBox::currentIndexChanged, this,
+            [this]()
+            {
+                const quint32 id = selectedPiece();
+                if (m_updatingList || id == 0)
+                {
+                    return;
+                }
+                Settings s = settings(id);
+                s.fabric = m_pieceFabricCombo->currentData().toString();
+                m_settings.insert(id, s);
+                changed();
+                emit fabricChanged();
             });
     connect(m_list, &QTreeWidget::currentItemChanged, this, &PatternPiecesPanel::showAdjustment);
 
@@ -511,6 +535,7 @@ WorkspaceSetup PatternPiecesPanel::setup() const
         kept.pair = s.pair;
         kept.flip = s.flip;
         kept.adjustment = s.adjustment;
+        kept.fabric = s.fabric;
         result.pieces.append(kept);
     }
     result.switchedOff = m_switchedOff.values();
@@ -559,6 +584,7 @@ void PatternPiecesPanel::applySetup(const WorkspaceSetup &setup)
             s.pair = kept.pair;
             s.flip = kept.flip;
             s.adjustment = kept.adjustment;
+            s.fabric = FabricPreset::preset(kept.fabric).id == kept.fabric ? kept.fabric : QString();
             m_settings.insert(id, s);
         }
     }
@@ -746,6 +772,7 @@ void PatternPiecesPanel::showAdjustment()
     m_liftSpin->setValue(static_cast<double>(a.lift));
     m_aroundSpin->setValue(static_cast<double>(a.around));
     m_turnSpin->setValue(static_cast<double>(a.turn));
+    m_pieceFabricCombo->setCurrentIndex(qMax(0, m_pieceFabricCombo->findData(id != 0 ? settings(id).fabric : QString())));
     m_adjustBox->setEnabled(id != 0);
     m_updatingList = updating;
 }
@@ -1051,6 +1078,8 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             panel.outlineCount = flat.outlineCount;
             panel.corners = flat.corners;
             panel.notches = flat.notches;
+            panel.grain = QVector2D(static_cast<float>(piece.grain.x()), static_cast<float>(piece.grain.y()));
+            panel.fabric = s.fabric;
             result.append(panel);
         }
     }
@@ -1550,6 +1579,108 @@ Viewport3D::LineSet PatternPiecesPanel::notchLines(const QVector<GarmentPanel> &
         }
     }
     return ticks;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+Viewport3D::LineSet PatternPiecesPanel::grainLines(const QVector<GarmentPanel> &panels)
+{
+    Viewport3D::LineSet lines;
+    lines.color = QColor(30, 120, 60);
+    lines.width = 2.0f;
+    for (const GarmentPanel &panel : panels)
+    {
+        if (panel.rest.positions.isEmpty() || panel.rest.indices.size() < 3
+            || panel.shape.positions.size() != panel.rest.positions.size())
+        {
+            continue;
+        }
+        const QVector2D grain = panel.grain.isNull() ? QVector2D(0, 1) : panel.grain.normalized();
+        QVector2D middle;
+        float from = std::numeric_limits<float>::max();
+        float to = std::numeric_limits<float>::lowest();
+        for (const QVector3D &p : panel.rest.positions)
+        {
+            middle += p.toVector2D();
+        }
+        middle /= static_cast<float>(panel.rest.positions.size());
+        for (const QVector3D &p : panel.rest.positions)
+        {
+            const float along = QVector2D::dotProduct(p.toVector2D() - middle, grain);
+            from = qMin(from, along);
+            to = qMax(to, along);
+        }
+
+        // A point of the flat piece where the cloth is now: in the triangle it falls in, at the same share of its
+        // corners.
+        const auto onCloth = [&panel](const QVector2D &point, QVector3D *at)
+        {
+            for (int t = 0; t + 2 < panel.rest.indices.size(); t += 3)
+            {
+                const int ia = static_cast<int>(panel.rest.indices.at(t));
+                const int ib = static_cast<int>(panel.rest.indices.at(t + 1));
+                const int ic = static_cast<int>(panel.rest.indices.at(t + 2));
+                const QVector2D a = panel.rest.positions.at(ia).toVector2D();
+                const QVector2D b = panel.rest.positions.at(ib).toVector2D();
+                const QVector2D c = panel.rest.positions.at(ic).toVector2D();
+                const float area = (b.x() - a.x()) * (c.y() - a.y()) - (c.x() - a.x()) * (b.y() - a.y());
+                if (qAbs(area) < 1e-9f)
+                {
+                    continue;
+                }
+                const float u = ((b.x() - point.x()) * (c.y() - point.y()) - (c.x() - point.x()) * (b.y() - point.y()))
+                                / area;
+                const float v = ((c.x() - point.x()) * (a.y() - point.y()) - (a.x() - point.x()) * (c.y() - point.y()))
+                                / area;
+                const float w = 1 - u - v;
+                if (u >= -1e-4f && v >= -1e-4f && w >= -1e-4f)
+                {
+                    *at = panel.shape.positions.at(ia) * u + panel.shape.positions.at(ib) * v
+                          + panel.shape.positions.at(ic) * w;
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        // Three quarters of the piece's length along the grain, in steps of about 2 cm.
+        const float half = (to - from) * 0.375f;
+        const QVector2D center = middle + grain * ((from + to) / 2);
+        if (half < 1.0f)
+        {
+            continue;
+        }
+        const int steps = qMax(2, static_cast<int>(2 * half / 2.0f));
+        QVector<QVector3D> points;
+        QVector<bool> inside;
+        for (int i = 0; i <= steps; ++i)
+        {
+            QVector3D at;
+            inside.append(onCloth(center + grain * (-half + 2 * half * static_cast<float>(i) / steps), &at));
+            points.append(at);
+        }
+        for (int i = 1; i <= steps; ++i)
+        {
+            if (inside.at(i - 1) && inside.at(i))
+            {
+                lines.segments << points.at(i - 1) << points.at(i);
+            }
+        }
+        // Arrowheads, in the cloth: from each end back along the line and out to its sides.
+        const QVector2D side(-grain.y(), grain.x());
+        for (const float end : {-1.0f, 1.0f})
+        {
+            QVector3D tip;
+            QVector3D left;
+            QVector3D right;
+            const QVector2D tipFlat = center + grain * (end * half);
+            const QVector2D back = tipFlat - grain * (end * 2.0f);
+            if (onCloth(tipFlat, &tip) && onCloth(back + side * 1.0f, &left) && onCloth(back - side * 1.0f, &right))
+            {
+                lines.segments << tip << left << tip << right;
+            }
+        }
+    }
+    return lines;
 }
 
 //---------------------------------------------------------------------------------------------------------------------

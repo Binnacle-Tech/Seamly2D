@@ -91,7 +91,9 @@ struct ClothSettings
     int   substeps{30};             ///< Solver steps per frame; more is stiffer and slower. A waistband needs 30
     int   iterations{4};            ///< Passes over the stretch and seam constraints in each step
     float gravity{981.0f};          ///< cm/s²
-    float stretchCompliance{0.0f};  ///< 0: the fabric does not stretch
+    float stretchCompliance{0.0f};  ///< Along the grain (the warp); 0: the fabric does not stretch
+    float crossCompliance{0.0f};    ///< Across the grain (the weft)
+    float biasCompliance{0.0f};     ///< On the bias, 45 degrees to the grain, where a woven gives most
     float bendCompliance{4e-4f};    ///< larger is softer: chiffon drapes, denim does not
     float damping{2.0f};            ///< 1/s
     float thickness{0.4f};          ///< How far the cloth keeps from the body
@@ -110,11 +112,13 @@ struct FabricPreset
     QString id{};
     QString name{};
     int     gramsPerSquareMeter{120};
-    float   stretchCompliance{0};   ///< 0: does not stretch (wovens); knits stretch
+    float   stretchCompliance{0};   ///< Along the grain; 0: does not stretch
     float   bendCompliance{4e-4f};  ///< larger drapes softer
     float   friction{0.3f};
     float   thickness{0.4f};        ///< centimeters the cloth keeps from the body
     float   damping{2.0f};
+    float   crossCompliance{0};     ///< Across the grain: wovens give a little, knits most
+    float   biasCompliance{0};      ///< On the bias: wovens give most here
 
     /** @brief apply returns @p settings with this fabric's properties. */
     ClothSettings apply(ClothSettings settings) const;
@@ -131,6 +135,10 @@ struct FabricPreset
  * Extended position based dynamics (XPBD) with small steps: every mesh edge keeps its length on the flat piece
  * (stretch), every pair of triangles resists folding (bend), seams pull their two edges together, and the body and the
  * floor push the cloth out. Panels that are not sewable stay where they are.
+ *
+ * How much an edge stretches depends on its angle to the panel's grainline: as much as the fabric gives along the
+ * grain, across it, or on the bias at 45 degrees, blended in between. A panel with a fabric of its own stretches,
+ * bends and weighs as that fabric; friction, thickness and damping are the garment's.
  */
 class ClothSimulator
 {
@@ -181,6 +189,7 @@ private:
         int   a;
         int   b;
         float rest;
+        float compliance;
     };
 
     /** @brief Particle a held to the point (1 - t) b0 + t b1 of the other side of a seam. */
@@ -201,7 +210,7 @@ private:
     };
 
     void substep(float h, float gravity, float sewingTarget);
-    void solveDistances(const QVector<Distance> &constraints, int begin, int end, float compliance, float h);
+    void solveDistances(const QVector<Distance> &constraints, int begin, int end, float h);
     void solveSeams(float target);
     void collide(int begin, int end, float h);
     void addSeam(const Seam &seam);

@@ -75,6 +75,7 @@ public:
         bool            pair{false};
         bool            flip{false};
         PieceAdjustment adjustment{}; ///< moved by hand from where the placement puts it
+        QString         fabric{};     ///< a fabric preset's id; empty for the garment's fabric
     };
 
     void     setPieces(const QVector<PatternPiece> &pieces);
@@ -150,6 +151,11 @@ public:
                                         double from = 0.0, double to = 1.0);
     /** @brief notchLines returns a short tick into each piece at each of its notches. */
     static Viewport3D::LineSet notchLines(const QVector<GarmentPanel> &panels);
+    /**
+     * @brief grainLines returns each piece's grainline, through its middle along the grain, on the cloth as it lies,
+     * with an arrowhead at each end.
+     */
+    static Viewport3D::LineSet grainLines(const QVector<GarmentPanel> &panels);
 
 signals:
     void arrangementChanged();
@@ -197,6 +203,7 @@ private:
     QDoubleSpinBox *m_aroundSpin;
     QDoubleSpinBox *m_turnSpin;
     QPushButton    *m_resetAdjustButton;
+    QComboBox      *m_pieceFabricCombo;
     QLabel      *m_status;
     QPushButton *m_reloadButton;
     QPushButton *m_measurementsButton;

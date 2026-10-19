@@ -412,6 +412,10 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
             continue;
         }
 
+        // The panel's own fabric, or the garment's.
+        const ClothSettings fabric =
+            panel.fabric.isEmpty() ? m_settings : FabricPreset::preset(panel.fabric).apply(m_settings);
+
         // Each particle weighs as much as the fabric around it: a third of the area of its triangles. (Equal weights
         // would make the side of a piece with more particles heavier.) Weights are relative, 1 for 1 cm².
         QVector<float> area(panel.shape.positions.size(), 0.0f);
@@ -430,15 +434,30 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
         }
         for (const float particleArea : area)
         {
-            const float mass = particleArea * qMax(0.01f, m_settings.weight);
+            const float mass = particleArea * qMax(0.01f, fabric.weight);
             m_inverseMass.append(mass > 1e-6f ? 1.0f / mass : 0.0f);
         }
 
-        // Stretch: every edge keeps its length on the flat piece. Bend: across every inner edge, the two opposite
-        // corners keep their flat distance, softly.
+        // Stretch: every edge keeps its length on the flat piece, giving as much as the fabric does in its direction
+        // (along the grain, across it, or on the bias). Bend: across every inner edge, the two opposite corners keep
+        // their flat distance, softly.
         QHash<QPair<int, int>, int> opposite;
         const auto rest = [&panel](int a, int b)
         { return (panel.rest.positions.at(a) - panel.rest.positions.at(b)).length(); };
+        const QVector2D grain = panel.grain.isNull() ? QVector2D(0, 1) : panel.grain.normalized();
+        const auto stretchCompliance = [&panel, &grain, &fabric](int a, int b)
+        {
+            const QVector2D edge = (panel.rest.positions.at(b) - panel.rest.positions.at(a)).toVector2D();
+            const float length = edge.length();
+            if (length < 1e-6f)
+            {
+                return fabric.stretchCompliance;
+            }
+            const float along = QVector2D::dotProduct(edge, grain) / length; // cos of the angle to the grain
+            const float bias = 4 * along * along * (1 - along * along);       // sin² of twice it: 1 at 45 degrees
+            const float straight = along * along >= 0.5f ? fabric.stretchCompliance : fabric.crossCompliance;
+            return straight * (1 - bias) + fabric.biasCompliance * bias;
+        };
         for (int t = 0; t + 2 < panel.rest.indices.size(); t += 3)
         {
             const int v[3] = {static_cast<int>(panel.rest.indices.at(t)),
@@ -454,11 +473,11 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
                 if (it == opposite.constEnd())
                 {
                     opposite.insert(edge, c);
-                    m_stretch.append({offset + a, offset + b, rest(a, b)});
+                    m_stretch.append({offset + a, offset + b, rest(a, b), stretchCompliance(a, b)});
                 }
                 else if (it.value() != c)
                 {
-                    m_bend.append({offset + it.value(), offset + c, rest(it.value(), c)});
+                    m_bend.append({offset + it.value(), offset + c, rest(it.value(), c), fabric.bendCompliance});
                 }
             }
         }
@@ -708,7 +727,7 @@ void ClothSimulator::substep(float h, float gravity, float sewn)
                     [this, h](int p)
                     {
                         const Ranges &r = m_ranges.at(p);
-                        solveDistances(m_stretch, r.stretchBegin, r.stretchEnd, m_settings.stretchCompliance, h);
+                        solveDistances(m_stretch, r.stretchBegin, r.stretchEnd, h);
                     });
         solveSeams(sewn);
     }
@@ -716,7 +735,7 @@ void ClothSimulator::substep(float h, float gravity, float sewn)
                 [this, h](int p)
                 {
                     const Ranges &r = m_ranges.at(p);
-                    solveDistances(m_bend, r.bendBegin, r.bendEnd, m_settings.bendCompliance, h);
+                    solveDistances(m_bend, r.bendBegin, r.bendEnd, h);
                 });
 
     // The body, and the velocities the step leaves: particle by particle, in runs side by side.
@@ -728,10 +747,9 @@ void ClothSimulator::substep(float h, float gravity, float sewn)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
-void ClothSimulator::solveDistances(const QVector<Distance> &constraints, int begin, int end, float compliance,
-                                    float h)
+void ClothSimulator::solveDistances(const QVector<Distance> &constraints, int begin, int end, float h)
 {
-    const float alpha = compliance / (h * h);
+    const float perStep = 1.0f / (h * h);
     QVector3D *position = m_position.data();
     const float *inverseMass = m_inverseMass.constData();
     const Distance *constraint = constraints.constData();
@@ -746,7 +764,7 @@ void ClothSimulator::solveDistances(const QVector<Distance> &constraints, int be
         {
             continue;
         }
-        const float lambda = -(length - c.rest) / (wa + wb + alpha);
+        const float lambda = -(length - c.rest) / (wa + wb + c.compliance * perStep);
         const QVector3D correction = d * (lambda / length);
         position[c.a] += correction * wa;
         position[c.b] -= correction * wb;
@@ -951,6 +969,8 @@ QVector<QVector<float>> ClothSimulator::easeMap(float limit) const
 ClothSettings FabricPreset::apply(ClothSettings settings) const
 {
     settings.stretchCompliance = stretchCompliance;
+    settings.crossCompliance = crossCompliance;
+    settings.biasCompliance = biasCompliance;
     settings.bendCompliance = bendCompliance;
     settings.friction = friction;
     settings.thickness = thickness;
@@ -963,14 +983,17 @@ ClothSettings FabricPreset::apply(ClothSettings settings) const
 QVector<FabricPreset> FabricPreset::presets()
 {
     const auto tr = [](const char *text) { return QCoreApplication::translate("Seamly3D::FabricPreset", text); };
-    //        id,                 name,                    g/m², stretch, bend,   friction, thickness, damping
-    return {{QStringLiteral("cotton"), tr("Cotton shirting"), 120, 0.0f, 4e-4f, 0.30f, 0.40f, 2.0f},
-            {QStringLiteral("linen"), tr("Linen"), 180, 0.0f, 2e-4f, 0.35f, 0.40f, 2.0f},
-            {QStringLiteral("denim"), tr("Denim"), 380, 0.0f, 2e-5f, 0.40f, 0.45f, 2.5f},
-            {QStringLiteral("jersey"), tr("Cotton jersey (knit)"), 180, 4e-6f, 6e-4f, 0.35f, 0.40f, 2.0f},
-            {QStringLiteral("silk"), tr("Silk"), 60, 0.0f, 2e-3f, 0.15f, 0.30f, 1.5f},
-            {QStringLiteral("fleece"), tr("Fleece"), 280, 1e-6f, 1e-4f, 0.45f, 0.60f, 3.0f},
-            {QStringLiteral("leather"), tr("Leather"), 800, 0.0f, 5e-6f, 0.50f, 0.50f, 3.0f}};
+    // Stretch along the grain, across it and on the bias: wovens give little across and more on the bias, knits most
+    // across. Not much more than this: a skirt cut on the bias, held up by its waistline alone, slips down the hips.
+    //        id,                 name,                    g/m², along,  bend,   friction, thickness, damping, across,
+    //                                                                                                        bias
+    return {{QStringLiteral("cotton"), tr("Cotton shirting"), 120, 0.0f, 4e-4f, 0.30f, 0.40f, 2.0f, 1e-7f, 5e-7f},
+            {QStringLiteral("linen"), tr("Linen"), 180, 0.0f, 2e-4f, 0.35f, 0.40f, 2.0f, 1e-7f, 4e-7f},
+            {QStringLiteral("denim"), tr("Denim"), 380, 0.0f, 2e-5f, 0.40f, 0.45f, 2.5f, 5e-8f, 3e-7f},
+            {QStringLiteral("jersey"), tr("Cotton jersey (knit)"), 180, 3e-6f, 6e-4f, 0.35f, 0.40f, 2.0f, 6e-6f, 4e-6f},
+            {QStringLiteral("silk"), tr("Silk"), 60, 0.0f, 2e-3f, 0.15f, 0.30f, 1.5f, 1e-7f, 1e-6f},
+            {QStringLiteral("fleece"), tr("Fleece"), 280, 1e-6f, 1e-4f, 0.45f, 0.60f, 3.0f, 2e-6f, 1.5e-6f},
+            {QStringLiteral("leather"), tr("Leather"), 800, 0.0f, 5e-6f, 0.50f, 0.50f, 3.0f, 5e-8f, 1e-7f}};
 }
 
 //---------------------------------------------------------------------------------------------------------------------

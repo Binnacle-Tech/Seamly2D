@@ -49,6 +49,7 @@ struct PatternPiece
     bool      onFold{false};
     QVector<int> corners{}; ///< Indices in seamLine of the piece's own points (where its seam lines meet)
     QVector<int> notches{}; ///< Indices in seamLine of its notches (where seams are lined up)
+    QPointF   grain{0, 1};  ///< Direction of the grainline, in seamLine's coordinates (Y down); down the piece if none
 };
 
 //---------------------------------------------------------------------------------------------------------------------

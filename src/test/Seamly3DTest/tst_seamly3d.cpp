@@ -31,6 +31,7 @@
 #include <QElapsedTimer>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QComboBox>
 #include <QTableWidget>
 #include <QTreeWidget>
 #include <QVector2D>
@@ -44,6 +45,7 @@
 #include <QtTest>
 
 #include <limits>
+#include <numeric>
 #include <memory>
 
 #include "bodymeasurements.h"
@@ -264,6 +266,8 @@ private slots:
     void sleevesAreMirrorImages();
     void seamFinderSetsInTwoPieceSleeves();
     void seamFinderSetsSleeveIntoYokedArmhole();
+    void clothStretchesWithTheGrain();
+    void piecesKeepGrainAndFabric();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -2948,6 +2952,7 @@ void TST_Seamly3D::workspaceSetupFile()
     WorkspaceSetup setup;
     setup.pieces.append({7, QStringLiteral("Front"), PiecePlacement::LeftLegFront, true, true});
     setup.pieces.append({9, QStringLiteral("Collar"), PiecePlacement::Collar, false, false});
+    setup.pieces[1].fabric = QStringLiteral("linen");
     setup.switchedOff << QStringLiteral("7:0:1-9:0:2@0.000");
     SeamSpec seam;
     seam.pieceA = 7;
@@ -2971,6 +2976,8 @@ void TST_Seamly3D::workspaceSetupFile()
     QCOMPARE(read.pieces.at(0).placement, PiecePlacement::LeftLegFront);
     QVERIFY(read.pieces.at(0).pair && read.pieces.at(0).flip);
     QCOMPARE(read.pieces.at(1).placement, PiecePlacement::Collar);
+    QVERIFY(read.pieces.at(0).fabric.isEmpty()); // the garment's
+    QCOMPARE(read.pieces.at(1).fabric, QStringLiteral("linen"));
     QCOMPARE(read.switchedOff, setup.switchedOff);
     QCOMPARE(read.added.size(), 1);
     QCOMPARE(read.added.at(0).key(), seam.key());
@@ -4465,6 +4472,160 @@ void TST_Seamly3D::seamFinderSetsSleeveIntoYokedArmhole()
         QCOMPARE(it.value(), 4);
         QVERIFY(qAbs(capSewn.value(it.key()) - 1) < 1e-6);
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+namespace
+{
+/**
+ * @brief A 60 cm square of cloth draped over a ball for 2.5 s, in the given fabric, its grain at @p degrees from the
+ * square's sides. Returns how much farther from its middle, as a share of the flat distance, its corners are than the
+ * middles of its sides; and, in @p strain, how much it is stretched on average.
+ */
+float cornersFurther(const ClothSettings &fabric, float degrees, const QString &ownFabric = QString(),
+                     float *strain = nullptr)
+{
+    GarmentPanel cloth = rectanglePanel(60, 60);
+    for (QVector3D &p : cloth.shape.positions)
+    {
+        p = QVector3D(p.x() - 30, 125, p.y() - 30);
+    }
+    const auto radians = static_cast<float>(qDegreesToRadians(static_cast<double>(degrees)));
+    cloth.grain = QVector2D(std::sin(radians), std::cos(radians));
+    cloth.fabric = ownFabric;
+
+    ClothSimulator simulator;
+    simulator.setSettings(fabric);
+    simulator.setBody(sphereMesh(QVector3D(0, 100, 0), 20));
+    simulator.setGarment({cloth}, {});
+    for (int frame = 0; frame < 75; ++frame)
+    {
+        simulator.step();
+    }
+    const GarmentPanel draped = simulator.panels().constFirst();
+    if (strain != nullptr)
+    {
+        const QVector<float> map = simulator.strainMap().constFirst();
+        *strain = std::accumulate(map.cbegin(), map.cend(), 0.0f) / static_cast<float>(qMax(1, map.size()));
+    }
+    const auto nearest = [&cloth](float x, float y)
+    {
+        int best = 0;
+        for (int v = 0; v < cloth.rest.positions.size(); ++v)
+        {
+            if ((cloth.rest.positions.at(v) - QVector3D(x, y, 0)).length()
+                < (cloth.rest.positions.at(best) - QVector3D(x, y, 0)).length())
+            {
+                best = v;
+            }
+        }
+        return best;
+    };
+    const int middle = nearest(30, 30);
+    const auto stretch = [&](float x, float y)
+    {
+        const int v = nearest(x, y);
+        return (draped.shape.positions.at(v) - draped.shape.positions.at(middle)).length()
+               / (cloth.rest.positions.at(v) - cloth.rest.positions.at(middle)).length();
+    };
+    const float corners = (stretch(0, 0) + stretch(60, 0) + stretch(60, 60) + stretch(0, 60)) / 4;
+    const float sides = (stretch(30, 0) + stretch(60, 30) + stretch(30, 60) + stretch(0, 30)) / 4;
+    return corners - sides;
+}
+} // namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothStretchesWithTheGrain()
+{
+    // A fabric that gives on the bias only. With the grain along the square's sides, the bias runs to its corners:
+    // they pull out farther (from the middle, for their distance on the flat square) than with the grain along a
+    // diagonal, when the bias runs to the middles of its sides. A fabric that does not stretch is the same both ways.
+    ClothSettings bias;
+    bias.substeps = 10;
+    bias.biasCompliance = 2e-5f;
+    const float straight = cornersFurther(bias, 0);
+    const float diagonal = cornersFurther(bias, 45);
+    QVERIFY2(straight - diagonal > 0.01f, qPrintable(QStringLiteral("%1 %2").arg(straight).arg(diagonal)));
+    ClothSettings stiff;
+    stiff.substeps = 10;
+    const float stiffStraight = cornersFurther(stiff, 0);
+    const float stiffDiagonal = cornersFurther(stiff, 45);
+    QVERIFY2(qAbs(stiffStraight - stiffDiagonal) < 0.002f,
+             qPrintable(QStringLiteral("%1 %2").arg(stiffStraight).arg(stiffDiagonal)));
+
+    // A piece of jersey in a garment that does not stretch: the piece stretches as jersey does.
+    float garment = 0;
+    float ownJersey = 0;
+    cornersFurther(stiff, 0, QString(), &garment);
+    cornersFurther(stiff, 0, QStringLiteral("jersey"), &ownJersey);
+    QVERIFY2(ownJersey > garment + 0.002f, qPrintable(QStringLiteral("%1 %2").arg(ownJersey).arg(garment)));
+
+    // The presets: wovens give least along the grain and most on the bias; jersey most across.
+    for (const FabricPreset &fabric : FabricPreset::presets())
+    {
+        QVERIFY(fabric.stretchCompliance <= fabric.crossCompliance);
+        if (fabric.id != QLatin1String("jersey") && fabric.id != QLatin1String("fleece"))
+        {
+            QVERIFY(fabric.crossCompliance < fabric.biasCompliance);
+        }
+    }
+    const FabricPreset jersey = FabricPreset::preset(QStringLiteral("jersey"));
+    QVERIFY(jersey.crossCompliance > jersey.biasCompliance && jersey.crossCompliance > jersey.stretchCompliance);
+    const ClothSettings applied = jersey.apply(ClothSettings());
+    QCOMPARE(applied.crossCompliance, jersey.crossCompliance);
+    QCOMPARE(applied.biasCompliance, jersey.biasCompliance);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::piecesKeepGrainAndFabric()
+{
+    // A piece's grainline and its own fabric reach its panels, and its grainline is drawn along the grain.
+    auto provider = std::make_shared<FakeProvider>();
+    PatternPiece front = tshirtBody(1, QStringLiteral("Front"), 8);
+    front.grain = QPointF(1, 0); // across the piece
+    provider->m_pieces = {front, tshirtBody(2, QStringLiteral("Back"), 2)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    PatternPiecesPanel::Settings settings = piecesPanel.settings(2);
+    settings.fabric = QStringLiteral("denim");
+    piecesPanel.setSettings(2, settings);
+
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    for (const GarmentPanel &panel : panels)
+    {
+        QCOMPARE(panel.grain, panel.pieceId == 1 ? QVector2D(1, 0) : QVector2D(0, 1)); // down the piece by default
+        QCOMPARE(panel.fabric, panel.pieceId == 2 ? QStringLiteral("denim") : QString());
+    }
+    QCOMPARE(piecesPanel.setup().pieces.at(1).fabric, QStringLiteral("denim"));
+
+    // The back's grainline runs down it, around the body: its ends far apart in height, close across.
+    const Viewport3D::LineSet lines = PatternPiecesPanel::grainLines(panels);
+    QVERIFY(lines.segments.size() > 20);
+    for (const GarmentPanel &panel : panels)
+    {
+        const Viewport3D::LineSet one = PatternPiecesPanel::grainLines({panel});
+        QVERIFY(one.segments.size() > 4);
+        float low = std::numeric_limits<float>::max();
+        float high = std::numeric_limits<float>::lowest();
+        for (const QVector3D &p : one.segments)
+        {
+            low = qMin(low, p.y());
+            high = qMax(high, p.y());
+        }
+        // Down the back; across the front, so at one height (give or take its arrowheads).
+        QVERIFY2(panel.pieceId == 2 ? high - low > 30.0f : high - low < 3.0f,
+                 qPrintable(QStringLiteral("%1 %2").arg(low).arg(high)));
+    }
+
+    // A fabric of its own is chosen for the piece selected.
+    piecesPanel.selectPiece(1);
+    auto *combo = piecesPanel.findChild<QComboBox *>(QStringLiteral("seamly3dPieceFabric_ComboBox"));
+    QVERIFY(combo != nullptr);
+    QVERIFY(combo->currentData().toString().isEmpty());
+    combo->setCurrentIndex(combo->findData(QStringLiteral("silk")));
+    QCOMPARE(piecesPanel.settings(1).fabric, QStringLiteral("silk"));
+    piecesPanel.selectPiece(2);
+    QCOMPARE(combo->currentData().toString(), QStringLiteral("denim"));
 }
 
 QTEST_MAIN(TST_Seamly3D)

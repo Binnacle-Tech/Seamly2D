@@ -29,11 +29,15 @@
 #include <QHash>
 #include <QLineF>
 #include <QSharedPointer>
+#include <QtMath>
 
+#include "../ifc/ifcdef.h"
 #include "../ifc/xml/vabstractpattern.h"
 #include "../vmisc/def.h"
 #include "../vmisc/vabstractapplication.h"
 #include "../vmisc/vcommonsettings.h"
+#include "../vpatterndb/calculator.h"
+#include "../vpatterndb/floatItemData/vgrainlinedata.h"
 #include "../vpatterndb/floatItemData/vpiecelabeldata.h"
 #include "../vpatterndb/variables/measurement_variable.h"
 #include "../vpatterndb/vcontainer.h"
@@ -129,6 +133,35 @@ QVector<PatternPiece> PatternSource::pieces(QString *error)
                 }
             }
             std::sort(result3D.notches.begin(), result3D.notches.end());
+
+            // Its grainline: between its two anchor points, or at its angle (as the layout finds it). Down the piece
+            // when it has none, or it can not be worked out.
+            const VGrainlineData &grainline = piece.GetGrainlineGeometry();
+            if (grainline.IsVisible())
+            {
+                try
+                {
+                    qreal degrees = 0;
+                    if (grainline.topAnchorPoint() != NULL_ID && grainline.bottomAnchorPoint() != NULL_ID)
+                    {
+                        const QSharedPointer<VPointF> top = data->GeometricObject<VPointF>(grainline.topAnchorPoint());
+                        const QSharedPointer<VPointF> bottom =
+                            data->GeometricObject<VPointF>(grainline.bottomAnchorPoint());
+                        degrees = QLineF(static_cast<QPointF>(*bottom), static_cast<QPointF>(*top)).angle();
+                    }
+                    else
+                    {
+                        Calculator calculator;
+                        degrees = calculator.EvalFormula(data->DataVariables(), grainline.getRotation());
+                    }
+                    // Angles count counterclockwise, with Y down in the pattern.
+                    const qreal radians = qDegreesToRadians(degrees);
+                    result3D.grain = QPointF(qCos(radians), -qSin(radians));
+                }
+                catch (...)
+                {
+                }
+            }
 
             const VPieceLabelData &label = piece.GetPatternPieceData();
             result3D.quantity = qMax(1, label.GetQuantity());

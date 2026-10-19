@@ -338,6 +338,7 @@ void Workspace3DWindow::showSeamLines()
         }
         lines = PatternPiecesPanel::seamLines(panels, seams, colors);
         lines.append(PatternPiecesPanel::notchLines(panels));
+        lines.append(PatternPiecesPanel::grainLines(panels));
     }
     for (const auto &edge : highlighted)
     {
