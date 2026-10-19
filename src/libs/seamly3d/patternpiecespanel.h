@@ -108,6 +108,9 @@ public:
     /** @brief The fabric the garment is made of (FabricPreset id). */
     QString      fabric() const;
     void         setFabric(const QString &id);
+    /** @brief Whether the cloth is kept from going through itself (slower). */
+    bool         selfCollision() const;
+    void         setSelfCollision(bool on);
     /** @brief How the draped garment is colored. */
     FitMap::Kind fitMap() const;
     void         setFitMap(FitMap::Kind kind);
@@ -212,6 +215,7 @@ private:
     QPushButton *m_resetButton;
     QLabel      *m_simulationStatus;
     QComboBox   *m_fabricCombo;
+    QCheckBox   *m_selfCollisionCheckBox;
     QComboBox   *m_fitMapCombo;
     QWidget     *m_legend;
     QLabel      *m_legendBar;

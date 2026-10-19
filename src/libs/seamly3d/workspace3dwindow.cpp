@@ -405,7 +405,9 @@ void Workspace3DWindow::setSimulationRunning(bool run)
                            + edgeName(seam.panelB, seam.edgeB));
         }
 
-        m_simulator.setSettings(FabricPreset::preset(m_piecesPanel->fabric()).apply(ClothSettings()));
+        ClothSettings settings = FabricPreset::preset(m_piecesPanel->fabric()).apply(ClothSettings());
+        settings.selfCollision = m_piecesPanel->selfCollision();
+        m_simulator.setSettings(settings);
         m_simulator.setBody(m_viewport->mesh());
         m_simulator.setGarment(panels, seams);
         m_viewport->setOverlaysMovable(false); // the draped garment: Reset to move the pieces again

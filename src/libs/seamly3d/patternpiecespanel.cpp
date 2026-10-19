@@ -158,6 +158,7 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
     , m_resetButton(new QPushButton(tr("Reset"), this))
     , m_simulationStatus(new QLabel(this))
     , m_fabricCombo(new QComboBox(this))
+    , m_selfCollisionCheckBox(new QCheckBox(tr("Cloth collides with itself"), this))
     , m_fitMapCombo(new QComboBox(this))
     , m_legend(new QWidget(this))
     , m_legendBar(new QLabel(m_legend))
@@ -453,6 +454,17 @@ PatternPiecesPanel::PatternPiecesPanel(QWidget *parent)
 
     auto *fabricForm = new QFormLayout;
     fabricForm->addRow(tr("Fabric:"), m_fabricCombo);
+    m_selfCollisionCheckBox->setChecked(true);
+    m_selfCollisionCheckBox->setObjectName(QStringLiteral("seamly3dSelfCollision_CheckBox"));
+    m_selfCollisionCheckBox->setToolTip(tr("Keep layers of cloth from going through each other (a collar on the "
+                                           "body, a yoke on a back). Draping is slower."));
+    connect(m_selfCollisionCheckBox, &QCheckBox::toggled, this,
+            [this]()
+            {
+                changed();
+                emit fabricChanged();
+            });
+    fabricForm->addRow(QString(), m_selfCollisionCheckBox);
     fabricForm->addRow(tr("Fit map:"), m_fitMapCombo);
     fabricForm->addRow(QString(), m_legend);
     layout->addLayout(fabricForm);
@@ -543,6 +555,7 @@ WorkspaceSetup PatternPiecesPanel::setup() const
     result.added = m_addedSeams;
     result.fabric = fabric();
     result.fitMap = fitMap();
+    result.selfCollision = selfCollision();
     return result;
 }
 
@@ -599,6 +612,7 @@ void PatternPiecesPanel::applySetup(const WorkspaceSetup &setup)
         setFabric(setup.fabric);
     }
     setFitMap(setup.fitMap);
+    setSelfCollision(setup.selfCollision);
     m_applyingSetup = false;
 
     rebuildList();
@@ -772,7 +786,8 @@ void PatternPiecesPanel::showAdjustment()
     m_liftSpin->setValue(static_cast<double>(a.lift));
     m_aroundSpin->setValue(static_cast<double>(a.around));
     m_turnSpin->setValue(static_cast<double>(a.turn));
-    m_pieceFabricCombo->setCurrentIndex(qMax(0, m_pieceFabricCombo->findData(id != 0 ? settings(id).fabric : QString())));
+    const QString ownFabric = id != 0 ? settings(id).fabric : QString();
+    m_pieceFabricCombo->setCurrentIndex(qMax(0, m_pieceFabricCombo->findData(ownFabric)));
     m_adjustBox->setEnabled(id != 0);
     m_updatingList = updating;
 }
@@ -895,6 +910,18 @@ void PatternPiecesPanel::setFabric(const QString &id)
     {
         m_fabricCombo->setCurrentIndex(index);
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+bool PatternPiecesPanel::selfCollision() const
+{
+    return m_selfCollisionCheckBox->isChecked();
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void PatternPiecesPanel::setSelfCollision(bool on)
+{
+    m_selfCollisionCheckBox->setChecked(on);
 }
 
 //---------------------------------------------------------------------------------------------------------------------

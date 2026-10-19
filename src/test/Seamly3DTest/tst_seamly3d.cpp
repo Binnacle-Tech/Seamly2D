@@ -268,6 +268,7 @@ private slots:
     void seamFinderSetsSleeveIntoYokedArmhole();
     void clothStretchesWithTheGrain();
     void piecesKeepGrainAndFabric();
+    void clothKeepsOffItself();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -2966,6 +2967,7 @@ void TST_Seamly3D::workspaceSetupFile()
     setup.added.append(seam);
     setup.fabric = QStringLiteral("denim");
     setup.fitMap = FitMap::Kind::Ease;
+    setup.selfCollision = false;
 
     WorkspaceSetup read;
     QString error;
@@ -2985,6 +2987,7 @@ void TST_Seamly3D::workspaceSetupFile()
     QCOMPARE(read.added.at(0).endA, 0.75);
     QCOMPARE(read.fabric, QStringLiteral("denim"));
     QCOMPARE(read.fitMap, FitMap::Kind::Ease);
+    QVERIFY(!read.selfCollision);
 
     // Not a setup: refused, and the setup given is left as it was.
     WorkspaceSetup untouched;
@@ -2999,6 +3002,7 @@ void TST_Seamly3D::workspaceSetupFile()
         "pieces": [{"id": 1, "name": "A", "placement": "hovering"}, {"id": 2, "name": "B", "placement": "back"}]})";
     QVERIFY(WorkspaceSetup::fromJson(newer, &read));
     QCOMPARE(read.fabric, QStringLiteral("linen"));
+    QVERIFY(read.selfCollision); // on unless the file says otherwise
     QCOMPARE(read.pieces.size(), 1);
     QCOMPARE(read.pieces.at(0).placement, PiecePlacement::Back);
 }
@@ -4626,6 +4630,58 @@ void TST_Seamly3D::piecesKeepGrainAndFabric()
     QCOMPARE(piecesPanel.settings(1).fabric, QStringLiteral("silk"));
     piecesPanel.selectPiece(2);
     QCOMPARE(combo->currentData().toString(), QStringLiteral("denim"));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::clothKeepsOffItself()
+{
+    // Two squares of cloth dropped on a ball, one 5 cm above the other: the upper one comes to lie on the lower one,
+    // not through it. Without self collision both end up on the ball.
+    const auto drop = [](bool selfCollision)
+    {
+        GarmentPanel lower = rectanglePanel(40, 40);
+        GarmentPanel upper = lower;
+        for (QVector3D &p : lower.shape.positions)
+        {
+            p = QVector3D(p.x() - 20, 122, p.y() - 20);
+        }
+        for (QVector3D &p : upper.shape.positions)
+        {
+            p = QVector3D(p.x() - 20, 127, p.y() - 20);
+        }
+        ClothSettings settings;
+        settings.substeps = 10;
+        settings.selfCollision = selfCollision;
+        ClothSimulator simulator;
+        simulator.setSettings(settings);
+        simulator.setBody(sphereMesh(QVector3D(0, 100, 0), 20));
+        simulator.setGarment({lower, upper}, {});
+        for (int frame = 0; frame < 60; ++frame)
+        {
+            simulator.step();
+        }
+        // How far each square is from the ball over its top, at the least: the upper one rests on the lower one.
+        const QVector<GarmentPanel> draped = simulator.panels();
+        float least[2] = {std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
+        int over = 0;
+        for (int k = 0; k < 2; ++k)
+        {
+            for (const QVector3D &p : draped.at(k).shape.positions)
+            {
+                if (QVector2D(p.x(), p.z()).length() < 8.0f)
+                {
+                    least[k] = qMin(least[k], (p - QVector3D(0, 100, 0)).length() - 20);
+                    over += k;
+                }
+            }
+        }
+        return over > 10 ? least[1] - least[0] : -1.0f; // it stays on top of the ball, it does not slide off
+    };
+    const ClothSettings defaults;
+    const float apart = drop(true);
+    QVERIFY2(apart > defaults.selfDistance * 0.7f, qPrintable(QString::number(apart)));
+    const float through = drop(false);
+    QVERIFY2(through < 0.1f, qPrintable(QString::number(through)));
 }
 
 QTEST_MAIN(TST_Seamly3D)

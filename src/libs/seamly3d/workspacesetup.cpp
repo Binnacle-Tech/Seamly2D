@@ -144,6 +144,10 @@ QByteArray WorkspaceSetup::toJson() const
         root.insert(QStringLiteral("fabric"), fabric);
     }
     root.insert(QStringLiteral("fitMap"), fitMapId(fitMap));
+    if (!selfCollision)
+    {
+        root.insert(QStringLiteral("selfCollision"), false);
+    }
 
     QJsonArray pieceArray;
     for (const PieceSetup &piece : pieces)
@@ -207,6 +211,7 @@ bool WorkspaceSetup::fromJson(const QByteArray &json, WorkspaceSetup *setup, QSt
     WorkspaceSetup result;
     result.fabric = root.value(QStringLiteral("fabric")).toString();
     result.fitMap = fitMapFromId(root.value(QStringLiteral("fitMap")).toString());
+    result.selfCollision = root.value(QStringLiteral("selfCollision")).toBool(true);
     for (const QJsonValue &value : root.value(QStringLiteral("pieces")).toArray())
     {
         const QJsonObject object = value.toObject();

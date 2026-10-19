@@ -31,6 +31,7 @@
 #include <QSemaphore>
 #include <QThread>
 #include <QThreadPool>
+#include <QVarLengthArray>
 #include <QtMath>
 
 #include <algorithm>
@@ -377,6 +378,15 @@ void ClothSimulator::clear()
     m_bend.clear();
     m_ranges.clear();
     m_seams.clear();
+    m_clothTriangles.clear();
+    m_panelOf.clear();
+    m_restPosition.clear();
+    m_onSeam.clear();
+    m_nearSeam.clear();
+    m_checkpoint.clear();
+    m_selfReach = 0;
+    m_substeps = 0;
+    m_selfColliding = false;
     m_seamCount = 0;
     m_sewingTime = 0;
     m_time = 0;
@@ -396,6 +406,24 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
         m_offset.append(offset);
         m_position.append(panel.shape.positions);
         m_velocity.append(QVector<QVector3D>(panel.shape.positions.size()));
+        m_panelOf.append(QVector<int>(panel.shape.positions.size(), static_cast<int>(m_offset.size()) - 1));
+        m_restPosition.append(panel.rest.positions);
+        if (panel.sewable)
+        {
+            for (int t = 0; t + 2 < panel.rest.indices.size(); t += 3)
+            {
+                ClothTriangle triangle;
+                triangle.a = offset + static_cast<int>(panel.rest.indices.at(t));
+                triangle.b = offset + static_cast<int>(panel.rest.indices.at(t + 1));
+                triangle.c = offset + static_cast<int>(panel.rest.indices.at(t + 2));
+                triangle.panel = static_cast<int>(m_offset.size()) - 1;
+                triangle.restCenter = (panel.rest.positions.at(triangle.a - offset)
+                                       + panel.rest.positions.at(triangle.b - offset)
+                                       + panel.rest.positions.at(triangle.c - offset))
+                                      / 3;
+                m_clothTriangles.append(triangle);
+            }
+        }
         Ranges ranges;
         ranges.stretchBegin = static_cast<int>(m_stretch.size());
         ranges.bendBegin = static_cast<int>(m_bend.size());
@@ -497,10 +525,49 @@ void ClothSimulator::setGarment(const QVector<GarmentPanel> &panels, const QVect
     }
 
     float widest = 0;
+    m_onSeam = QVector<bool>(m_position.size(), false);
     for (const SeamLink &link : qAsConst(m_seams))
     {
         widest = qMax(widest, link.start);
+        m_onSeam[link.a] = true;
+        m_onSeam[link.b0] = true;
+        m_onSeam[link.b1] = true;
     }
+    // A piece does not collide with itself within a little more than its triangles' size: its own neighbourhood.
+    double edges = 0;
+    for (const Distance &edge : qAsConst(m_stretch))
+    {
+        edges += static_cast<double>(edge.rest);
+    }
+    m_selfReach = m_stretch.isEmpty() ? 0.0f : static_cast<float>(1.6 * edges / m_stretch.size());
+    // Nor, near a seam, with the piece across it: there the two meet, folded along it as the seam closes.
+    m_nearSeam = m_onSeam;
+    for (int p = 0; p < m_panels.size(); ++p)
+    {
+        const int first = m_offset.at(p);
+        const int last = first + static_cast<int>(m_panels.at(p).shape.positions.size());
+        QVector<QVector3D> seamPoints;
+        for (int i = first; i < last; ++i)
+        {
+            if (m_onSeam.at(i))
+            {
+                seamPoints.append(m_restPosition.at(i));
+            }
+        }
+        for (int i = first; i < last && !seamPoints.isEmpty(); ++i)
+        {
+            for (const QVector3D &point : qAsConst(seamPoints))
+            {
+                if ((m_restPosition.at(i) - point).lengthSquared() < m_selfReach * m_selfReach)
+                {
+                    m_nearSeam[i] = true;
+                    break;
+                }
+            }
+        }
+    }
+    m_checkpoint = m_position;
+    m_checkpoint.detach();
     // Sew first, then let the garment settle under its full weight.
     m_sewingTime = widest / qMax(1.0f, m_settings.sewingSpeed) + 0.3f;
 }
@@ -738,6 +805,30 @@ void ClothSimulator::substep(float h, float gravity, float sewn)
                     solveDistances(m_bend, r.bendBegin, r.bendEnd, h);
                 });
 
+    // The cloth off itself once it is sewn (while it is sewn, the pieces are pulled together through whatever is in
+    // the way), every so often: often enough that what goes through goes through only a little and comes back.
+    if (!m_settings.selfCollision || !isSewn())
+    {
+        m_selfColliding = false;
+    }
+    else if (!m_selfColliding)
+    {
+        // Each particle is on the side it is on now, sewn: where it was before, while sewing, does not count.
+        m_selfColliding = true;
+        m_substeps = 0;
+        m_checkpoint = m_position;
+        m_checkpoint.detach();
+    }
+    else
+    {
+        const int every = qMax(1, qRound(selfCollisionInterval / h));
+        if (++m_substeps >= every)
+        {
+            m_substeps = 0;
+            selfCollide();
+        }
+    }
+
     // The body, and the velocities the step leaves: particle by particle, in runs side by side.
     const int runs = chunks(count);
     parallelFor(runs,
@@ -854,6 +945,282 @@ void ClothSimulator::collide(int begin, int end, float h)
 
         velocity[i] = (p - previous[i]) / h;
     }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void ClothSimulator::selfCollide()
+{
+    const int count = static_cast<int>(m_position.size());
+    if (m_clothTriangles.isEmpty() || m_checkpoint.size() != count)
+    {
+        m_checkpoint = m_position;
+        m_checkpoint.detach();
+        return;
+    }
+
+    // How far each particle moved since the last pass: a triangle is looked for as far as the distance to keep and
+    // as far as its corners moved; a particle where it went from and to.
+    QVector<float> moved(count);
+    for (int i = 0; i < count; ++i)
+    {
+        // Looked for no farther than half a centimeter more: cloth moving faster than that between passes (90 cm/s)
+        // is falling or flying, and what it goes through it is let through.
+        moved[i] = qMin((m_position.at(i) - m_checkpoint.at(i)).length(), 0.5f);
+    }
+    const float distance = qMax(0.01f, m_settings.selfDistance);
+
+    // The triangles in a grid of cells, hashed: each in the cells its box, grown that far, overlaps.
+    constexpr float cell = 2.5f;
+    const int tableSize = [this]()
+    {
+        int size = 1024;
+        while (size < m_clothTriangles.size() * 4 && size < (1 << 22))
+        {
+            size *= 2;
+        }
+        return size;
+    }();
+    const auto bucket = [tableSize](int x, int y, int z)
+    {
+        const quint32 h = (static_cast<quint32>(x) * 73856093u) ^ (static_cast<quint32>(y) * 19349663u)
+                          ^ (static_cast<quint32>(z) * 83492791u);
+        return static_cast<int>(h & static_cast<quint32>(tableSize - 1));
+    };
+    const auto cellOf = [](float value) { return static_cast<int>(std::floor(value / cell)); };
+    const QVector3D *position = m_position.constData();
+    // Counted, then filled: the cells of each triangle worked out once.
+    struct Cells
+    {
+        int low[3];
+        int high[3];
+    };
+    QVector<Cells> cells(m_clothTriangles.size());
+    QVector<int> start(tableSize + 1, 0);
+    // Cloth lying on the floor (a piece that fell) is left in a heap.
+    const float floor = m_floor + 2.0f;
+    for (int t = 0; t < m_clothTriangles.size(); ++t)
+    {
+        const ClothTriangle &triangle = m_clothTriangles.at(t);
+        const QVector3D &a = position[triangle.a];
+        const QVector3D &b = position[triangle.b];
+        const QVector3D &c = position[triangle.c];
+        Cells &range = cells[t];
+        if (qMax(qMax(a.y(), b.y()), c.y()) < floor)
+        {
+            for (int k = 0; k < 3; ++k)
+            {
+                range.low[k] = 0;
+                range.high[k] = -1; // no cells
+            }
+            continue;
+        }
+        const float grow = distance + qMax(qMax(moved.at(triangle.a), moved.at(triangle.b)), moved.at(triangle.c));
+        for (int k = 0; k < 3; ++k)
+        {
+            range.low[k] = cellOf(qMin(qMin(a[k], b[k]), c[k]) - grow);
+            range.high[k] = qMin(cellOf(qMax(qMax(a[k], b[k]), c[k]) + grow), range.low[k] + 8); // torn: bounded
+        }
+        for (int x = range.low[0]; x <= range.high[0]; ++x)
+        {
+            for (int y = range.low[1]; y <= range.high[1]; ++y)
+            {
+                for (int z = range.low[2]; z <= range.high[2]; ++z)
+                {
+                    ++start[bucket(x, y, z) + 1];
+                }
+            }
+        }
+    }
+    for (int b = 0; b < tableSize; ++b)
+    {
+        start[b + 1] += start.at(b);
+    }
+    QVector<int> entries(start.at(tableSize));
+    QVector<int> fill = start;
+    for (int t = 0; t < m_clothTriangles.size(); ++t)
+    {
+        const Cells &range = cells.at(t);
+        for (int x = range.low[0]; x <= range.high[0]; ++x)
+        {
+            for (int y = range.low[1]; y <= range.high[1]; ++y)
+            {
+                for (int z = range.low[2]; z <= range.high[2]; ++z)
+                {
+                    entries[fill[bucket(x, y, z)]++] = t;
+                }
+            }
+        }
+    }
+
+    // Each particle out of the triangles near it, to the side it was on, half the way: the triangle's particles, near
+    // the cloth this one is part of, do the rest. Worked out from where everything is, then moved.
+    QVector<QVector3D> push(count);
+    QVector3D *pushed = push.data();
+    const float selfReach = m_selfReach;
+    const auto check = [&](int begin, int end)
+    {
+        for (int i = begin; i < end; ++i)
+        {
+            const QVector3D &p = position[i];
+            if (m_inverseMass.at(i) <= 0 || p.y() < floor)
+            {
+                continue;
+            }
+            const QVector3D &from = m_checkpoint.at(i);
+            float deepest = 0;
+            QVector3D out;
+            // The cells it went through (one, mostly), and the triangles in them.
+            QVarLengthArray<int, 8> buckets;
+            int low[3];
+            int high[3];
+            for (int k = 0; k < 3; ++k)
+            {
+                low[k] = cellOf(qMin(p[k], from[k]));
+                high[k] = qMin(cellOf(qMax(p[k], from[k])), low[k] + 2);
+            }
+            for (int x = low[0]; x <= high[0]; ++x)
+            {
+                for (int y = low[1]; y <= high[1]; ++y)
+                {
+                    for (int z = low[2]; z <= high[2]; ++z)
+                    {
+                        const int b = bucket(x, y, z);
+                        if (!buckets.contains(b))
+                        {
+                            buckets.append(b);
+                        }
+                    }
+                }
+            }
+            for (const int b : buckets)
+            {
+                for (int e = start.at(b); e < start.at(b + 1); ++e)
+                {
+                    const ClothTriangle &triangle = m_clothTriangles.at(entries.at(e));
+                    if (i == triangle.a || i == triangle.b || i == triangle.c)
+                    {
+                        continue;
+                    }
+                    if (m_panelOf.at(i) == triangle.panel
+                        && (m_restPosition.at(i) - triangle.restCenter).lengthSquared() < selfReach * selfReach)
+                    {
+                        continue; // its own neighbourhood
+                    }
+                    if (m_nearSeam.at(i) && m_panelOf.at(i) != triangle.panel
+                        && (m_nearSeam.at(triangle.a) || m_nearSeam.at(triangle.b) || m_nearSeam.at(triangle.c)))
+                    {
+                        continue; // the two sides of a seam meet
+                    }
+                    const QVector3D &a = position[triangle.a];
+                    const QVector3D &bb = position[triangle.b];
+                    const QVector3D &c = position[triangle.c];
+                    float u = 0;
+                    float v = 0;
+                    float w = 0;
+                    const QVector3D onTriangle = closestOnTriangle(p, a, bb, c, u, v, w);
+                    const QVector3D offset = p - onTriangle;
+                    const float reach = distance + moved.at(i)
+                                        + qMax(qMax(moved.at(triangle.a), moved.at(triangle.b)), moved.at(triangle.c));
+                    if (offset.lengthSquared() > reach * reach)
+                    {
+                        continue;
+                    }
+                    QVector3D normal = QVector3D::crossProduct(bb - a, c - a);
+                    if (normal.lengthSquared() < 1e-12f)
+                    {
+                        continue;
+                    }
+                    normal.normalize();
+
+                    // The side it was on at the last pass.
+                    const QVector3D &a0 = m_checkpoint.at(triangle.a);
+                    const QVector3D &b0 = m_checkpoint.at(triangle.b);
+                    const QVector3D &c0 = m_checkpoint.at(triangle.c);
+                    const QVector3D normal0 = QVector3D::crossProduct(b0 - a0, c0 - a0);
+                    const float before =
+                        QVector3D::dotProduct(m_checkpoint.at(i) - (a0 * u + b0 * v + c0 * w), normal0);
+                    const float now = QVector3D::dotProduct(offset, normal);
+                    const float side = qAbs(before) > 1e-6f ? (before > 0 ? 1.0f : -1.0f) : (now >= 0 ? 1.0f : -1.0f);
+                    float missing = 0;
+                    QVector3D away;
+                    if (now * side < 0)
+                    {
+                        // Gone through: back out of the face it went through, if it is over the face (or just about:
+                        // one that went through where the corners of triangles meet went through them all at their
+                        // edges). Beside the triangle, it went by, not through.
+                        const QVector3D flat = p - normal * now - a;
+                        const QVector3D ab = bb - a;
+                        const QVector3D ac = c - a;
+                        const float d00 = QVector3D::dotProduct(ab, ab);
+                        const float d01 = QVector3D::dotProduct(ab, ac);
+                        const float d11 = QVector3D::dotProduct(ac, ac);
+                        const float d20 = QVector3D::dotProduct(flat, ab);
+                        const float d21 = QVector3D::dotProduct(flat, ac);
+                        const float denominator = d00 * d11 - d01 * d01;
+                        if (qAbs(denominator) < 1e-12f)
+                        {
+                            continue;
+                        }
+                        const float overB = (d11 * d20 - d01 * d21) / denominator;
+                        const float overC = (d00 * d21 - d01 * d20) / denominator;
+                        constexpr float margin = -0.05f;
+                        if (overB < margin || overC < margin || 1 - overB - overC < margin)
+                        {
+                            continue;
+                        }
+                        missing = distance - now * side;
+                        away = normal * side;
+                    }
+                    else
+                    {
+                        // Too close, on its own side: away from the nearest point of the triangle. (Particles of pieces
+                        // sewn side by side lie beside each other's triangles, not over them: they are as far apart as
+                        // the particles are.)
+                        const float length = offset.length();
+                        if (length >= distance)
+                        {
+                            continue;
+                        }
+                        missing = distance - length;
+                        away = length > 1e-6f ? offset / length : normal * side;
+                    }
+                    if (missing > deepest)
+                    {
+                        deepest = missing;
+                        out = away;
+                    }
+                }
+            }
+            // No more than the distance to keep at a time: where the seams hold two layers through each other (pieces
+            // sewn to overlap), it gives way gently instead of fighting them.
+            pushed[i] = out * qMin(deepest, distance);
+        }
+    };
+    const int runs = chunks(count);
+    parallelFor(runs,
+                [&check, count, runs](int run)
+                { check(static_cast<int>(static_cast<qint64>(count) * run / runs),
+                        static_cast<int>(static_cast<qint64>(count) * (run + 1) / runs)); });
+    // Moved without speeding up: the push is not motion. What was moving it toward the other cloth this step stops
+    // (the layers meet, they do not bounce), and it slides on it as on the body, with the same friction.
+    const float friction = qBound(0.0f, m_settings.friction, 1.0f);
+    for (int i = 0; i < count; ++i)
+    {
+        const QVector3D &by = push.at(i);
+        if (by.isNull())
+        {
+            continue;
+        }
+        const QVector3D out = by.normalized();
+        QVector3D step = m_position.at(i) - m_previous.at(i);
+        step -= out * qMin(0.0f, QVector3D::dotProduct(step, out));
+        step -= (step - out * QVector3D::dotProduct(step, out)) * friction;
+        m_position[i] += by;
+        m_previous[i] = m_position.at(i) - step;
+    }
+    // A copy of its own: the positions must not be shared when the threads next write to them.
+    m_checkpoint = m_position;
+    m_checkpoint.detach();
 }
 
 //---------------------------------------------------------------------------------------------------------------------

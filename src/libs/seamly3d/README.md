@@ -313,6 +313,19 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   "Same as the garment", or any of the fabrics (jersey cuffs on a woven
   shirt, a denim yoke). The piece stretches, bends and weighs as that
   fabric; friction, thickness and damping stay the garment's.
+* **Cloth collides with itself** (on by default): once the garment is sewn,
+  180 times a second each particle of the cloth is kept 3 mm from the cloth's
+  triangles near it, on the side it was on: layers lie on each other instead
+  of going through (a collar on the body, a yoke on a back, a sleeve against
+  the side), and slide on each other with the fabric's friction. Left to
+  touch: a piece's own neighbourhood, two pieces near the seam between them
+  (they meet folded along it), and cloth that fell to the floor. While the
+  pieces are being sewn it is off: seams pull the pieces together through
+  whatever is in the way. Where seams hold two layers through each other
+  (pieces sewn to overlap), it gives way 3 mm at a time instead of fighting
+  them; cloth moving faster than 90 cm/s goes through. Edges crossing edges
+  are not caught, so a sharp fold can still slip through where there is no
+  particle. It makes draping 15 to 40% slower; untick it for speed.
 * **Fit map:** colors the draped garment.
   * **Stretch** shows how much longer the fabric is than the flat piece:
     blue where it is pushed together, green where it is relaxed, yellow to
@@ -322,8 +335,8 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
     more away.
 
 Not there yet: collars that fold over (a collar is a stand, it stays up),
-pockets, cuffs and facings (pieces hung beside the body are not sewn), self
-collision (cloth folding through itself), custom fabrics, and picking seam
+pockets, cuffs and facings (pieces hung beside the body are not sewn),
+collision between garments worn together, custom fabrics, and picking seam
 edges on the 2D pieces. A waistline holding a garment up still stretches a
 few percent (in cotton, about 5% for a skirt and 10% for trousers on the
 default body) where woven fabric would not, so it sits a little low.
@@ -339,7 +352,7 @@ keeps:
   moved by hand, and its own fabric if it has one (a piece is found again by
   its id, or by its name if the pattern was rebuilt);
 * the seams you switched off and the ones you added;
-* the fabric and the fit map.
+* the fabric, the fit map, and whether the cloth collides with itself.
 
 It is written half a second after each change, and read when the workspace
 opens the pattern. Opening a pattern and changing nothing writes nothing. A
@@ -386,6 +399,7 @@ It is JSON, so it can be read and kept in version control with the pattern:
             "40:0:1-41:1:1@0.000"
         ]
     },
+    "selfCollision": false,
     "version": 1
 }
 ```
@@ -393,13 +407,14 @@ It is JSON, so it can be read and kept in version control with the pattern:
 Placements are named (`front`, `back`, `left-side`, `right-side`,
 `left-sleeve`, `right-sleeve`, `lower-front`, `lower-back`,
 `left-leg-front`, `left-leg-back`, `right-leg-front`, `right-leg-back`,
-`waistband`, `collar`, `aside`, `hidden`), a piece moved by hand has
-`lift` (cm), `around` and `turn` (degrees), a seam has the part of each edge
-it takes (`startA`, `endA`, `startB`, `endB`, shares of the edge from 0 to
-1), and a seam left open is named
+`waistband`, `collar`, `aside`, `hidden`), `selfCollision` is written only
+when it is off, a piece with a fabric of its own has `fabric`, a piece moved
+by hand has `lift` (cm), `around` and `turn` (degrees), a seam has the part
+of each edge it takes (`startA`, `endA`, `startB`, `endB`, shares of the
+edge from 0 to 1), and a seam left open is named
 `pieceA:copyA:edgeA-pieceB:copyB:edgeB@startA`, edges counted from 0, with
-`/startB` after it when only part of edge B is sewn. A
-file from a newer version is read as far as it is understood.
+`/startB` after it when only part of edge B is sewn. A file from a newer
+version is read as far as it is understood.
 
 ### Importing SVG and DXF patterns
 
@@ -491,14 +506,15 @@ In order, because each one unblocks real patterns rather than test ones.
 FreeSewing's Devon jacket, imported from SVG, now hangs on the body as a
 jacket: yokes, front and back panels, collar, and both two-piece sleeves set
 into armholes made of four pieces each, each piece stretching along its own
-grain. But:
+grain, its layers kept off each other. But:
 
-1. **Self collision**, which layered garments, fold-over collars and
-   tucked-in shirts need.
-2. **Arrange from the pattern itself:** use grainlines and notches to tell
+1. **Arrange from the pattern itself:** use grainlines and notches to tell
    which way a piece goes, two-piece sleeves and front from back by shape,
    and where a band goes. Devon's "waistband" is the jacket's hem band: with
    nothing open at the waist it takes the pocket openings instead.
+2. **Several garments at once**, in layers (a shirt tucked into trousers),
+   and collars that fold over: self collision is there, garments and fold
+   lines are not.
 
 ### 1. Avatar
 
@@ -572,7 +588,8 @@ grain. But:
   mapped to stretch, stiffness, weight, friction and thickness
 - [x] Solver on all processor cores (pieces side by side); 30 steps per
   frame so waistbands hold; a speed limit so sleeves do not tangle
-- [ ] Self collision, and collision between garments
+- [x] Self collision: layers of the garment kept off each other, once sewn
+- [ ] Collision between garments worn together; edges crossing edges
 - [ ] Waistlines that hold without stretching (now 5% for a skirt, 10% for
   trousers in cotton): a stiffer solver for long edges under load, so wovens
   can give more on the bias too
@@ -582,9 +599,9 @@ grain. But:
 - [ ] Custom fabrics (stretch, weight and drape of your own), kept in the
   setup file
 - [ ] A smoothed collision body for the finest details
-- [ ] Faster: drape a garment in about a second (now 60 to 90 ms per frame
-  on four cores for 4,000 to 6,000 particles, so 3 s of draping takes 5 to
-  8 s); finer meshes where the cloth folds
+- [ ] Faster: drape a garment in about a second (now 65 to 95 ms per frame
+  on four cores for 4,000 to 6,000 particles with self collision, so 3 s of
+  draping takes 6 to 9 s); finer meshes where the cloth folds
 
 ### 5. Fit analysis
 

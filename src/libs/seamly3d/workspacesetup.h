@@ -87,6 +87,7 @@ public:
     QVector<SeamSpec>   added{};
     QString             fabric{};
     FitMap::Kind        fitMap{FitMap::Kind::None};
+    bool                selfCollision{true};
 
     /** @brief fileFor returns the setup file of a pattern file; empty for a pattern not saved yet. */
     static QString fileFor(const QString &patternFile);

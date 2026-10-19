@@ -101,6 +101,8 @@ struct ClothSettings
     float sewingSpeed{30.0f};       ///< cm/s the seams pull together at
     float sewingGravity{0.0f};      ///< Gravity, as a share of the full gravity, until the seams are closed
     float weight{1.0f};             ///< Areal weight, relative to a 120 g/m² shirting
+    bool  selfCollision{true};      ///< Keep the cloth from going through itself and the garment's other layers
+    float selfDistance{0.3f};       ///< centimeters the cloth keeps from itself
 };
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -139,6 +141,12 @@ struct FabricPreset
  * How much an edge stretches depends on its angle to the panel's grainline: as much as the fabric gives along the
  * grain, across it, or on the bias at 45 degrees, blended in between. A panel with a fabric of its own stretches,
  * bends and weighs as that fabric; friction, thickness and damping are the garment's.
+ *
+ * With self collision on, once the garment is sewn, every few steps (180 times a second) each particle is kept
+ * selfDistance from the cloth's triangles near it, on the side it was on before: layers (a collar on its stand, a
+ * yoke on a back, a sleeve against the body) do not go through each other. Its own neighbourhood on the piece, two
+ * pieces near the seam between them, and cloth lying on the floor are left to touch. Edges crossing edges are not
+ * caught: a fold may still slip through where no particle is.
  */
 class ClothSimulator
 {
@@ -182,6 +190,7 @@ public:
 
     static constexpr float maxStep = 0.5f;      ///< centimeters a particle may move in one solver step, at most
     static constexpr float speedLimit = 225.0f; ///< cm/s a particle may move at, at most
+    static constexpr float selfCollisionInterval = 1.0f / 180; ///< seconds between self collision passes
 
 private:
     struct Distance
@@ -202,6 +211,14 @@ private:
         float start; ///< the gap when sewing started
     };
 
+    /** @brief A triangle of the cloth, as particles, for self collision. */
+    struct ClothTriangle
+    {
+        int       a, b, c;
+        int       panel;
+        QVector3D restCenter; ///< on the flat piece
+    };
+
     /** @brief The constraints of one panel: [begin, end) in m_stretch and m_bend. */
     struct Ranges
     {
@@ -213,6 +230,7 @@ private:
     void solveDistances(const QVector<Distance> &constraints, int begin, int end, float h);
     void solveSeams(float target);
     void collide(int begin, int end, float h);
+    void selfCollide();
     void addSeam(const Seam &seam);
     QVector3D seamPoint(const SeamLink &link) const;
 
@@ -231,6 +249,15 @@ private:
     QVector<Distance>     m_bend{};
     QVector<Ranges>       m_ranges{};    ///< Per panel: panels share no particles, so they are solved side by side
     QVector<SeamLink>     m_seams{};
+    QVector<ClothTriangle> m_clothTriangles{};
+    QVector<int>          m_panelOf{};    ///< by particle
+    QVector<QVector3D>    m_restPosition{}; ///< by particle, on its flat piece
+    QVector<bool>         m_onSeam{};     ///< by particle: on an edge sewn to another
+    QVector<bool>         m_nearSeam{};   ///< by particle: on or near such an edge
+    QVector<QVector3D>    m_checkpoint{}; ///< where the particles were at the last self collision pass
+    float                 m_selfReach{0}; ///< centimeters, on the flat piece, within which a piece does not collide
+    int                   m_substeps{0};      ///< since the last self collision pass
+    bool                  m_selfColliding{false};
     int                   m_seamCount{0};
     float                 m_sewingTime{0};
     float                 m_time{0};
