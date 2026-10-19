@@ -59,6 +59,7 @@ enum class PiecePlacement : int
     RightLegBack,
     Waistband,     ///< Around the waist, sewn to the top of a skirt or trousers
     Collar,        ///< Around the neck, sewn to the neckline
+    Cuff,          ///< Around the wrist, sewn to the hem of the sleeve
     Aside,     ///< Hung flat behind the body (collars, pockets, facings...)
     Hidden,
     Count

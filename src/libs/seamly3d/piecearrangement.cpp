@@ -211,6 +211,48 @@ Mesh bandPiece(const Mesh &flat, const QRectF &bounds, PiecePlacement placement,
     return mesh;
 }
 
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief A cuff: a ring round the left wrist (the right one, mirrored) lengthwise, its top toward the elbow; a cuff
+ * drawn upright is turned, like a band. Its ends meet at the back of the wrist.
+ */
+Mesh cuffPiece(const Mesh &flat, const QRectF &bounds, bool mirrored, bool flip, const BodyFrame &frame)
+{
+    const bool lengthwise = bounds.width() >= bounds.height();
+    const auto length = static_cast<float>(lengthwise ? bounds.width() : bounds.height());
+    const auto along = [&bounds, lengthwise](const QVector3D &p)
+    { return static_cast<float>(lengthwise ? p.x() - bounds.left() : p.y() - bounds.top()); };
+    const auto down = [&bounds, lengthwise](const QVector3D &p)
+    { return static_cast<float>(lengthwise ? p.y() - bounds.top() : bounds.right() - p.x()); };
+
+    // Square to the arm at the wrist: out (away from the body) and forward.
+    const QVector3D toWrist = (frame.leftWrist - frame.leftShoulder).normalized();
+    const QVector3D side(1, 0, 0);
+    QVector3D out = side - toWrist * QVector3D::dotProduct(side, toWrist);
+    out = out.isNull() ? QVector3D(0, 0, 1) : out.normalized();
+    const QVector3D forward = QVector3D::crossProduct(toWrist, out).normalized();
+    const float radius = qMax(length / (2 * static_cast<float>(M_PI)), frame.armRadius * 0.6f);
+
+    Mesh mesh = flat;
+    for (QVector3D &p : mesh.positions)
+    {
+        float t = along(p);
+        if (flip)
+        {
+            t = length - t;
+        }
+        const float angle = static_cast<float>(M_PI) - t / radius; // from the back of the wrist round the outside
+        QVector3D at = frame.leftWrist + toWrist * down(p) + (out * qCos(angle) + forward * qSin(angle)) * radius;
+        if (mirrored)
+        {
+            at.setX(-at.x());
+        }
+        p = at;
+    }
+    mesh.computeNormals();
+    return mesh;
+}
+
 } // anonymous namespace
 
 //---------------------------------------------------------------------------------------------------------------------
@@ -440,6 +482,11 @@ PiecePlacement PieceArrangement::guess(const QString &name, const QPolygonF &out
     };
 
     // English, then the languages Seamly2D is most used in (German, French, Spanish, Dutch, Italian...).
+    // A sleeve's cuff is a cuff.
+    if (has({"cuff", "manschette", "poignet", "puño", "puno", "manchet", "polsino"}))
+    {
+        return PiecePlacement::Cuff;
+    }
     if (has({"sleeve", "ärmel", "aermel", "manche", "manga", "mouw", "manica"}))
     {
         return PiecePlacement::LeftSleeve;
@@ -458,7 +505,7 @@ PiecePlacement PieceArrangement::guess(const QString &name, const QPolygonF &out
         return has({"front", "vorder", "devant", "delantero", "voor", "davanti"}) ? PiecePlacement::Front
                                                                                  : PiecePlacement::Back;
     }
-    if (has({"pocket", "cuff", "facing", "band", "belt", "tasche", "poche", "bolsillo", "zak"}))
+    if (has({"pocket", "facing", "band", "belt", "tasche", "poche", "bolsillo", "zak"}))
     {
         return PiecePlacement::Aside;
     }
@@ -678,6 +725,8 @@ QString PieceArrangement::displayName(PiecePlacement placement)
             return tr("Waistband");
         case PiecePlacement::Collar:
             return tr("Collar");
+        case PiecePlacement::Cuff:
+            return tr("Cuff");
         case PiecePlacement::Aside:
             return tr("Beside the body");
         case PiecePlacement::Hidden:
@@ -692,7 +741,8 @@ namespace
 const char *const placementIds[] = {"front",           "back",           "left-side",       "right-side",
                                     "left-sleeve",     "right-sleeve",   "lower-front",     "lower-back",
                                     "left-leg-front",  "left-leg-back",  "right-leg-front", "right-leg-back",
-                                    "waistband",       "collar",         "aside",           "hidden"};
+                                    "waistband",       "collar",         "cuff",            "aside",
+                                    "hidden"};
 static_assert(sizeof(placementIds) / sizeof(placementIds[0]) == static_cast<size_t>(PiecePlacement::Count),
               "every placement needs an id");
 } // anonymous namespace
@@ -806,6 +856,10 @@ void PieceArrangement::axis(PiecePlacement placement, const BodyFrame &frame, fl
             *origin = mirrored(frame.leftShoulder);
             *up = (*origin - mirrored(frame.leftWrist)).normalized();
             break;
+        case PiecePlacement::Cuff:
+            *origin = mirrored(frame.leftWrist);
+            *up = (mirrored(frame.leftShoulder) - *origin).normalized();
+            break;
         case PiecePlacement::LeftLegFront:
         case PiecePlacement::LeftLegBack:
         case PiecePlacement::RightLegFront:
@@ -844,6 +898,8 @@ float PieceArrangement::aroundRadius(PiecePlacement placement, const BodyFrame &
             return frame.waistRadius + 1.0f;
         case PiecePlacement::Collar:
             return frame.neckRadius + 1.0f;
+        case PiecePlacement::Cuff:
+            return frame.armRadius;
         default:
             return frame.torsoRadius;
     }
@@ -901,6 +957,16 @@ QVector<Mesh> PieceArrangement::placeAsDrawn(const Mesh &flat, const QRectF &bou
             if (pair)
             {
                 result.append(bandPiece(flat, bounds, placement, true, true, flip, frame));
+            }
+            break;
+        }
+        case PiecePlacement::Cuff:
+        {
+            // One on each wrist, the mirror image of each other.
+            result.append(cuffPiece(flat, bounds, false, flip, frame));
+            if (pair)
+            {
+                result.append(cuffPiece(flat, bounds, true, flip, frame));
             }
             break;
         }

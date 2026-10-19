@@ -271,6 +271,7 @@ private slots:
     void clothKeepsOffItself();
     void seamFinderSewsHemBand();
     void arrangementTellsFrontFromBack();
+    void seamFinderSewsCuffs();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -1398,7 +1399,9 @@ void TST_Seamly3D::arrangementGuess_data()
     QTest::newRow("german back") << "Rückenteil" << static_cast<int>(PiecePlacement::Back);
     QTest::newRow("collar") << "Collar" << static_cast<int>(PiecePlacement::Collar);
     QTest::newRow("french collar") << "Col" << static_cast<int>(PiecePlacement::Collar);
-    QTest::newRow("cuff") << "Cuff" << static_cast<int>(PiecePlacement::Aside);
+    QTest::newRow("cuff") << "Cuff" << static_cast<int>(PiecePlacement::Cuff);
+    QTest::newRow("sleeve cuff") << "Sleeve cuff" << static_cast<int>(PiecePlacement::Cuff);
+    QTest::newRow("Manschette") << "Manschette" << static_cast<int>(PiecePlacement::Cuff);
     QTest::newRow("pocket") << "Back pocket" << static_cast<int>(PiecePlacement::Aside);
     QTest::newRow("trouser front") << "Trouser front" << static_cast<int>(PiecePlacement::LeftLegFront);
     QTest::newRow("pants back") << "Pants back" << static_cast<int>(PiecePlacement::LeftLegBack);
@@ -4752,6 +4755,66 @@ void TST_Seamly3D::arrangementTellsFrontFromBack()
     namedPanel.setProvider(named);
     QCOMPARE(namedPanel.settings(1).placement, PiecePlacement::Front);
     QCOMPARE(namedPanel.settings(2).placement, PiecePlacement::Front);
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsCuffs()
+{
+    // A cuff cut twice on the fold: half a cuff drawn, unfolded into the whole one, round each wrist where the sleeve
+    // ends, its upper edge sewn along the sleeve's hem.
+    auto provider = std::make_shared<FakeProvider>();
+    PatternPiece cuff = bandPiece(4, QStringLiteral("Cuff"), 15, 5, true);
+    cuff.quantity = 2;
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          tshirtSleeve(3), cuff};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    QCOMPARE(piecesPanel.settings(4).placement, PiecePlacement::Cuff);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 8);
+    QVector<int> cuffs;
+    for (int p = 0; p < panels.size(); ++p)
+    {
+        if (panels.at(p).pieceId == 4)
+        {
+            cuffs.append(p);
+            QVERIFY(panels.at(p).band && panels.at(p).hemBand && panels.at(p).cuff);
+            double longest = 0;
+            for (int e = 0; e < panels.at(p).edgeCount(); ++e)
+            {
+                longest = qMax(longest, panels.at(p).edgeLength(e));
+            }
+            QVERIFY2(qAbs(longest - 30) < 0.5, qPrintable(QString::number(longest))); // unfolded
+        }
+    }
+    QCOMPARE(cuffs.size(), 2);
+    QVERIFY(panels.at(cuffs.at(0)).shape.bounds().center().x() * panels.at(cuffs.at(1)).shape.bounds().center().x()
+            < 0); // one on each arm
+
+    // Each sewn to the hem of the sleeve on its arm, all of it.
+    QHash<int, double> sewn;
+    for (const Seam &seam : SeamFinder::find(panels))
+    {
+        if (!cuffs.contains(seam.panelA))
+        {
+            continue;
+        }
+        const GarmentPanel &sleeve = panels.at(seam.panelB);
+        QCOMPARE(sleeve.pieceId, quint32(3));
+        QCOMPARE(seam.edgeB, 2); // the sleeve's hem
+        QVERIFY(sleeve.shape.bounds().center().x() * panels.at(seam.panelA).shape.bounds().center().x() > 0);
+        sewn[seam.panelA] += seam.endA - seam.startA;
+        // The cuff's top meets the hem: they are close before sewing.
+        const QVector<int> hem = sleeve.edgeVertices(seam.edgeB);
+        const QVector3D middle = sleeve.shape.positions.at(hem.at(hem.size() / 2));
+        float nearest = std::numeric_limits<float>::max();
+        for (const QVector3D &p : panels.at(seam.panelA).shape.positions)
+        {
+            nearest = qMin(nearest, (p - middle).length());
+        }
+        QVERIFY2(nearest < 6.0f, qPrintable(QString::number(nearest)));
+    }
+    QCOMPARE(sewn.size(), 2);
 }
 
 QTEST_MAIN(TST_Seamly3D)

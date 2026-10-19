@@ -56,6 +56,7 @@ struct GarmentPanel
     bool         sewable{true};    ///< false for pieces hung beside the body
     bool         band{false};      ///< a waistband or collar: its lower edge is sewn along a waistline or neckline
     bool         hemBand{false};   ///< a band at the hem instead: its upper edge is sewn along the hems above it
+    bool         cuff{false};      ///< a hem band round the wrist: sewn to the hem of the sleeve
     bool         sleeve{false};    ///< a sleeve, or one piece of it: its cap is set into an armhole
     Mesh         rest{};
     Mesh         shape{};

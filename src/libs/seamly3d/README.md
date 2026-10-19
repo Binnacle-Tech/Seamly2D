@@ -145,7 +145,7 @@ and draping:
 * Each piece becomes an even triangle mesh (2.5 cm), wrapped without
   stretching around a cylinder just outside the body (front, back, sides),
   or around the arm for sleeves, from the shoulder tip toward the wrist.
-  Pockets, cuffs, facings and other pieces hang flat beside the body.
+  Pockets, facings and other pieces hang flat beside the body.
 * **Skirts** (front or back, from the waist) wrap around the hips from the
   waist down. **Trouser legs** (left or right leg, front or back) wrap around
   the leg, the crease (the middle of the hem) in front of it or behind it,
@@ -164,8 +164,14 @@ and draping:
   jacket, a top: no skirt, no trousers) is a hem band. It goes at the bottom
   of the bodice pieces, its top where their hems are, and its upper edge is
   sewn along the hems all the way round.
+* **Cuffs** go round each wrist, at the hem of the sleeve, as a ring as
+  long as the cuff (no narrower than the arm). A cuff cut on the fold is
+  unfolded first into the whole cuff (mirrored across its short end, or
+  its top if drawn upright), so the ring is the full cuff. Its upper edge is
+  sewn along the sleeve's hem: both pieces' hems of a two-piece sleeve.
+  Named "cuff", "Manschette", "poignet", "puño", "manchet" or "polsino".
 * Where a piece goes is guessed from its name (front, back, sleeve, skirt,
-  trouser, pants, waistband, collar, yoke..., also in German, French,
+  trouser, pants, waistband, collar, cuff, yoke..., also in German, French,
   Spanish, Dutch and Italian). Short words count at the start of a word, so
   "Front outside panel" is a front, not a side, and "Seitenteil" is a side;
   longer ones anywhere ("Topsleeve"). You can change it per piece, or hide
@@ -251,7 +257,7 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   and back, or a yoke and the panels below it). The opening at the top of a
   sleeve is sewn into the armhole on its side that it is as long as, or up
   to 15% longer (the ease): the top of the cap (its highest point in the
-  pattern) at the top of the armhole (the shoulder), the rest shared out
+  pattern, or a notch near it: the one matching the shoulder seam) at the top of the armhole (the shoulder), the rest shared out
   evenly round both from there, front to front. A one-piece cap into an
   armhole of two edges goes from the underarm instead, its ends at the side
   seam. Then each waistband or collar is sewn on: its lower edge along every
@@ -259,7 +265,8 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   5 cm above: the waistlines, the necklines), in order around the body, each
   edge taking a share of the band as long as itself; half a band takes the
   edges on its side only. A hem band is sewn the other way up: its upper
-  edge along the hems above it. A second band lying on the first (an under
+  edge along the hems above it, and a cuff its upper edge along the hem of
+  its sleeve. A second band lying on the first (an under
   collar on its upper collar) is sewn round to it, edge by edge. Last, an
   edge still open is sewn to the open edges of other pieces lying along it
   (within 5 cm) when they are as long as it together (within 8%): a yoke's
@@ -341,7 +348,8 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
     more away.
 
 Not there yet: collars that fold over (a collar is a stand, it stays up),
-pockets, cuffs and facings (pieces hung beside the body are not sewn),
+pockets and facings (pieces hung beside the body are not sewn), a front
+left open from the neck down (a jacket's fronts are sewn shut at the center),
 collision between garments worn together, custom fabrics, and picking seam
 edges on the 2D pieces. A waistline holding a garment up still stretches a
 few percent (in cotton, about 5% for a skirt and 10% for trousers on the
@@ -413,7 +421,7 @@ It is JSON, so it can be read and kept in version control with the pattern:
 Placements are named (`front`, `back`, `left-side`, `right-side`,
 `left-sleeve`, `right-sleeve`, `lower-front`, `lower-back`,
 `left-leg-front`, `left-leg-back`, `right-leg-front`, `right-leg-back`,
-`waistband`, `collar`, `aside`, `hidden`), `selfCollision` is written only
+`waistband`, `collar`, `cuff`, `aside`, `hidden`), `selfCollision` is written only
 when it is off, a piece with a fabric of its own has `fabric`, a piece moved
 by hand has `lift` (cm), `around` and `turn` (degrees), a seam has the part
 of each edge it takes (`startA`, `endA`, `startB`, `endB`, shares of the
@@ -511,14 +519,21 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 In order, because each one unblocks real patterns rather than test ones.
 FreeSewing's Devon jacket, imported from SVG, now hangs on the body as a
 jacket: yokes, front and back panels, collar, both two-piece sleeves set
-into armholes made of four pieces each, and the hem band round the hem, each
-piece stretching along its own grain, its layers kept off each other. But:
+into armholes made of four pieces each (the notch at the top of each cap on
+the shoulder seam, as its instructions say), the hem band round the hem and
+a cuff round each wrist, each piece stretching along its own grain, its
+layers kept off each other. Its cutting list (each piece's count, and which
+are cut on the fold) is read as drawn. But:
 
 1. **Arrange from the pattern itself, further:** use grainlines and notches
    to tell which way up a piece goes, and two-piece sleeves from body panels
    by shape. (Hem bands, and fronts from backs by their necks, are done:
    Devon's "waistband" is now sewn round its hem.)
-2. **Several garments at once**, in layers (a shirt tucked into trousers),
+2. **Facings and pockets, and an open front:** Devon's front facing is
+   sewn to the front's long edge, and the front opens down the middle; its
+   pockets sit on the front panel with the opening left unsewn. Now the
+   fronts are sewn shut and the facings and pockets hang beside the body.
+3. **Several garments at once**, in layers (a shirt tucked into trousers),
    and collars that fold over: self collision is there, garments and fold
    lines are not.
 
@@ -561,7 +576,9 @@ piece stretching along its own grain, its layers kept off each other. But:
 - [ ] Tell two-piece sleeves from body panels by shape (of two pieces on an
   arm, the under sleeve is told already)
 - [ ] Bands drawn upright in the pattern: tell their top from their bottom
-- [ ] Place cuffs (round the wrist), pockets and facings
+- [x] Place cuffs round the wrist, at the sleeve hem (unfolded when cut on
+  the fold)
+- [ ] Place pockets and facings
 - [ ] Several garments at once, in layers (a shirt under trousers)
 
 ### 3. Sewing
@@ -581,7 +598,10 @@ piece stretching along its own grain, its layers kept off each other. But:
   notches or points (now in percent)
 - [x] Two-piece sleeves set into the armhole, and armholes in several pieces
 - [ ] Gathers and ease: sew a longer edge into a shorter one on purpose
-- [ ] Cuffs, pockets and facings sewn on; collars that fold over
+- [x] Cuffs sewn to the sleeve hem; the sleeve notch at the cap top to the
+  shoulder seam
+- [ ] Pockets and facings sewn on (a pocket opening left open); collars
+  that fold over
 - [ ] Openings and closures: button stands that overlap, flies, zips
 - [ ] Fold lines and internal lines as creases (pleats, pressed folds)
 

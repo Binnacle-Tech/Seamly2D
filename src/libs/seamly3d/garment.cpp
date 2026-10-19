@@ -434,7 +434,8 @@ void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used
         for (int p = 0; p < panels.size(); ++p)
         {
             const GarmentPanel &panel = panels.at(p);
-            if (!panel.sewable || panel.band)
+            // A cuff on the sleeve, a hem band on the body.
+            if (!panel.sewable || panel.band || (band.hemBand && panel.sleeve != band.cuff))
             {
                 continue;
             }
@@ -1030,6 +1031,20 @@ void setInSleeveOpenings(const QVector<GarmentPanel> &panels, QSet<QPair<int, in
                 {
                     highest = panel.rest.positions.at(vertices.at(i)).y();
                     capTop = along;
+                }
+            }
+        }
+        // A notch near it is the top of the cap as the pattern marks it, the point that meets the shoulder seam.
+        {
+            const double highest = capTop;
+            double best = 0.15 * top->length;
+            for (const double share : panels.at(top->panel).edgeNotches(top->edge))
+            {
+                const double at = top->offset + (top->forward ? share : 1 - share) * top->length;
+                if (qAbs(at - highest) < best)
+                {
+                    best = qAbs(at - highest);
+                    capTop = at;
                 }
             }
         }

@@ -83,6 +83,7 @@ bool spreads(PiecePlacement placement)
     {
         case PiecePlacement::Waistband:
         case PiecePlacement::Collar:
+        case PiecePlacement::Cuff:
         case PiecePlacement::Aside:
         case PiecePlacement::Hidden:
             return false;
@@ -686,6 +687,7 @@ void PatternPiecesPanel::setPieces(const QVector<PatternPiece> &pieces)
 {
     m_pieces = pieces;
     m_flatPieces.clear();
+    m_unfoldedPieces.clear();
 
     QVector<const PatternPiece *> fronts; // new pieces put on the front by their shape alone
     for (const PatternPiece &piece : m_pieces)
@@ -855,13 +857,102 @@ void PatternPiecesPanel::nudge(quint32 id, int copy, float around, float lift)
     emit arrangementChanged();
 }
 
-//---------------------------------------------------------------------------------------------------------------------
-const PatternPiecesPanel::FlatPiece &PatternPiecesPanel::flatPiece(const PatternPiece &piece) const
+namespace
 {
-    auto it = m_flatPieces.find(piece.id);
-    if (it == m_flatPieces.end())
+//---------------------------------------------------------------------------------------------------------------------
+/**
+ * @brief A piece cut on the fold, unfolded: its outline and the mirror image of it across the fold, which is its
+ * short end on the left (the top, for a piece drawn upright). Its corners and notches go with it, both halves.
+ */
+PatternPiece unfolded(const PatternPiece &piece)
+{
+    const QPolygonF &outline = piece.seamLine;
+    const int n = static_cast<int>(outline.size());
+    if (n < 3)
     {
+        return piece;
+    }
+    const QRectF bounds = outline.boundingRect();
+    const bool lengthwise = bounds.width() >= bounds.height();
+    const auto onFold = [&](int i)
+    {
+        const QPointF &p = outline.at((i % n + n) % n);
+        return (lengthwise ? p.x() - bounds.left() : p.y() - bounds.top()) < 0.05;
+    };
+    const auto mirror = [&](const QPointF &p)
+    { return lengthwise ? QPointF(2 * bounds.left() - p.x(), p.y()) : QPointF(p.x(), 2 * bounds.top() - p.y()); };
+
+    // From the last point on the fold round the piece to the first one on it again.
+    int from = -1;
+    for (int i = 0; i < n && from < 0; ++i)
+    {
+        if (onFold(i) && !onFold(i + 1))
+        {
+            from = i;
+        }
+    }
+    if (from < 0)
+    {
+        return piece; // nothing on the fold
+    }
+    QVector<int> path{from};
+    for (int i = from + 1; i < from + n; ++i)
+    {
+        path.append(i % n);
+        if (onFold(i))
+        {
+            break;
+        }
+    }
+
+    PatternPiece result = piece;
+    result.seamLine.clear();
+    result.corners.clear();
+    result.notches.clear();
+    result.onFold = false;
+    QHash<int, int> at;      // where each point of the piece is now
+    QHash<int, int> mirrored; // and its mirror image
+    for (const int i : qAsConst(path))
+    {
+        at.insert(i, static_cast<int>(result.seamLine.size()));
+        result.seamLine.append(outline.at(i));
+    }
+    for (int k = static_cast<int>(path.size()) - 2; k >= 1; --k)
+    {
+        mirrored.insert(path.at(k), static_cast<int>(result.seamLine.size()));
+        result.seamLine.append(mirror(outline.at(path.at(k))));
+    }
+    const auto carry = [&](const QVector<int> &points, QVector<int> *into)
+    {
+        for (const int i : points)
+        {
+            for (const QHash<int, int> *map : {&at, &mirrored})
+            {
+                if (map->contains(i))
+                {
+                    into->append(map->value(i));
+                }
+            }
+        }
+        std::sort(into->begin(), into->end());
+    };
+    carry(piece.corners, &result.corners);
+    carry(piece.notches, &result.notches);
+    return result;
+}
+} // anonymous namespace
+
+//---------------------------------------------------------------------------------------------------------------------
+const PatternPiecesPanel::FlatPiece &PatternPiecesPanel::flatPiece(const PatternPiece &cut) const
+{
+    const bool unfold = cut.onFold && settings(cut.id).placement == PiecePlacement::Cuff;
+    QHash<quint32, FlatPiece> &cache = unfold ? m_unfoldedPieces : m_flatPieces;
+    auto it = cache.find(cut.id);
+    if (it == cache.end())
+    {
+        const PatternPiece piece = unfold ? unfolded(cut) : cut;
         FlatPiece flat;
+        flat.bounds = piece.seamLine.boundingRect();
         QVector<int> outlineVertex;
         flat.mesh = PieceMesher::mesh(piece.seamLine, meshEdge, &outlineVertex);
         flat.outlineCount = static_cast<int>(PieceMesher::resample(piece.seamLine, meshEdge).size());
@@ -888,7 +979,7 @@ const PatternPiecesPanel::FlatPiece &PatternPiecesPanel::flatPiece(const Pattern
             }
         }
         std::sort(flat.notches.begin(), flat.notches.end());
-        it = m_flatPieces.insert(piece.id, flat);
+        it = cache.insert(piece.id, flat);
     }
     return it.value();
 }
@@ -1099,8 +1190,8 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             adjustment.around += spread.value(piece.id);
         }
 
-        placedPieces.append(PieceArrangement::place(flat.mesh, piece.seamLine.boundingRect(), s.placement, s.pair,
-                                                    flip, frame, asideStart, adjustment));
+        placedPieces.append(
+            PieceArrangement::place(flat.mesh, flat.bounds, s.placement, s.pair, flip, frame, asideStart, adjustment));
         if (s.placement == PiecePlacement::Aside)
         {
             // Next piece in the row starts after this one (and its mirrored copy), with a gap.
@@ -1155,6 +1246,54 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
         }
     }
 
+    // A cuff goes where the sleeve on its arm ends, along the arm: its top at the sleeve's hem.
+    for (int i = 0; i < m_pieces.size(); ++i)
+    {
+        if (settings(m_pieces.at(i).id).placement != PiecePlacement::Cuff)
+        {
+            continue;
+        }
+        for (Mesh &cuff : placedPieces[i])
+        {
+            const float side = cuff.bounds().center().x() >= 0 ? 1.0f : -1.0f;
+            const QVector3D shoulder(side * frame.leftShoulder.x(), frame.leftShoulder.y(), frame.leftShoulder.z());
+            const QVector3D wrist(side * frame.leftWrist.x(), frame.leftWrist.y(), frame.leftWrist.z());
+            const QVector3D down = (wrist - shoulder).normalized();
+            float hemAt = std::numeric_limits<float>::lowest();
+            for (int j = 0; j < m_pieces.size(); ++j)
+            {
+                if (!isSleeve(settings(m_pieces.at(j).id).placement))
+                {
+                    continue;
+                }
+                for (const Mesh &sleeve : placedPieces.at(j))
+                {
+                    if (sleeve.bounds().center().x() * side <= 0)
+                    {
+                        continue;
+                    }
+                    for (const QVector3D &p : sleeve.positions)
+                    {
+                        hemAt = qMax(hemAt, QVector3D::dotProduct(p - shoulder, down));
+                    }
+                }
+            }
+            if (hemAt == std::numeric_limits<float>::lowest())
+            {
+                continue; // no sleeve on that arm: the cuff stays at the wrist
+            }
+            float topAt = std::numeric_limits<float>::max();
+            for (const QVector3D &p : cuff.positions)
+            {
+                topAt = qMin(topAt, QVector3D::dotProduct(p - shoulder, down));
+            }
+            for (QVector3D &p : cuff.positions)
+            {
+                p += down * (hemAt - topAt);
+            }
+        }
+    }
+
     for (int i = 0; i < m_pieces.size(); ++i)
     {
         const PatternPiece &piece = m_pieces.at(i);
@@ -1169,8 +1308,10 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             panel.name = piece.name;
             panel.color = pieceColors[i % (sizeof(pieceColors) / sizeof(pieceColors[0]))];
             panel.sewable = s.placement != PiecePlacement::Aside;
-            panel.band = s.placement == PiecePlacement::Waistband || s.placement == PiecePlacement::Collar;
-            panel.hemBand = hemBands && s.placement == PiecePlacement::Waistband;
+            panel.band = s.placement == PiecePlacement::Waistband || s.placement == PiecePlacement::Collar
+                         || s.placement == PiecePlacement::Cuff;
+            panel.cuff = s.placement == PiecePlacement::Cuff;
+            panel.hemBand = (hemBands && s.placement == PiecePlacement::Waistband) || panel.cuff;
             panel.sleeve = isSleeve(s.placement);
             panel.rest = flat.mesh;
             panel.shape = placed.at(copy);

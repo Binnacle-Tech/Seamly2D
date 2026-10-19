@@ -192,13 +192,16 @@ private:
         int          outlineCount{0};
         QVector<int> corners{};
         QVector<int> notches{};
+        QRectF       bounds{}; ///< of its outline
     };
+    /** @brief flatPiece is a piece's flat mesh; a cuff cut on the fold unfolded into the whole cuff. */
     const FlatPiece &flatPiece(const PatternPiece &piece) const;
 
     std::shared_ptr<PatternProvider> m_provider{};
     QVector<PatternPiece>            m_pieces{};
     QHash<quint32, Settings>         m_settings{};
     mutable QHash<quint32, FlatPiece> m_flatPieces{};
+    mutable QHash<quint32, FlatPiece> m_unfoldedPieces{};
 
     QTreeWidget *m_list;
     QWidget        *m_adjustBox;
