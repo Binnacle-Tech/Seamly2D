@@ -269,6 +269,8 @@ private slots:
     void clothStretchesWithTheGrain();
     void piecesKeepGrainAndFabric();
     void clothKeepsOffItself();
+    void seamFinderSewsHemBand();
+    void arrangementTellsFrontFromBack();
     void workspaceSetupKeptWithPattern();
     void seamEditorSwitchesAndAdds();
     void seamLinesFollowEdges();
@@ -4682,6 +4684,74 @@ void TST_Seamly3D::clothKeepsOffItself()
     QVERIFY2(apart > defaults.selfDistance * 0.7f, qPrintable(QString::number(apart)));
     const float through = drop(false);
     QVERIFY2(through < 0.1f, qPrintable(QString::number(through)));
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::seamFinderSewsHemBand()
+{
+    // A top with a "waistband" and nothing below the waist: the band is a hem band. It goes at the bottom of the top,
+    // and its upper edge is sewn along the hems, all the way round.
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 8), tshirtBody(2, QStringLiteral("Back"), 2),
+                          bandPiece(3, QStringLiteral("Waistband"), 98, 5, false)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    const QVector<GarmentPanel> panels = piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements()));
+    QCOMPARE(panels.size(), 5);
+    const GarmentPanel &band = panels.constLast();
+    QVERIFY(band.band && band.hemBand);
+    float hem = std::numeric_limits<float>::max();
+    for (int p = 0; p < 4; ++p)
+    {
+        QVERIFY(!panels.at(p).hemBand);
+        hem = qMin(hem, panels.at(p).shape.bounds().minimum.y());
+    }
+    QVERIFY2(qAbs(band.shape.bounds().maximum.y() - hem) < 0.01f,
+             qPrintable(QStringLiteral("%1 %2").arg(band.shape.bounds().maximum.y()).arg(hem)));
+
+    double sewn = 0;
+    int hems = 0;
+    for (const Seam &seam : SeamFinder::find(panels))
+    {
+        if (seam.panelA == 4)
+        {
+            QCOMPARE(seam.edgeB, static_cast<int>(Hem));
+            sewn += seam.endA - seam.startA;
+            ++hems;
+        }
+    }
+    QCOMPARE(hems, 4); // the front and the back, each in two halves
+    QVERIFY(qAbs(sewn - 1) < 0.05);
+
+    // With a skirt below, the same band is a waistband.
+    provider->m_pieces.append(skirtPiece(4, QStringLiteral("Skirt front")));
+    piecesPanel.setProvider(provider);
+    for (const GarmentPanel &panel : piecesPanel.panels(BodyFrame::fromMeasurements(BodyMeasurements())))
+    {
+        QVERIFY(!panel.hemBand);
+    }
+}
+
+//---------------------------------------------------------------------------------------------------------------------
+void TST_Seamly3D::arrangementTellsFrontFromBack()
+{
+    // Nothing in their names: both look like bodice pieces, the one with the deeper neck is the front.
+    QVERIFY(PieceArrangement::neckDepth(tshirtBody(1, QString(), 8).seamLine) > 7.0);
+    QVERIFY(PieceArrangement::neckDepth(tshirtBody(1, QString(), 2).seamLine) < 3.0);
+    auto provider = std::make_shared<FakeProvider>();
+    provider->m_pieces = {tshirtBody(1, QStringLiteral("Piece 1"), 2), tshirtBody(2, QStringLiteral("Piece 2"), 8)};
+    PatternPiecesPanel piecesPanel;
+    piecesPanel.setProvider(provider);
+    QCOMPARE(piecesPanel.settings(1).placement, PiecePlacement::Back);
+    QCOMPARE(piecesPanel.settings(2).placement, PiecePlacement::Front);
+
+    // Named, the names count.
+    auto named = std::make_shared<FakeProvider>();
+    named->m_pieces = {tshirtBody(1, QStringLiteral("Front"), 2), tshirtBody(2, QStringLiteral("Front lining"), 8)};
+    PatternPiecesPanel namedPanel;
+    namedPanel.setProvider(named);
+    QCOMPARE(namedPanel.settings(1).placement, PiecePlacement::Front);
+    QCOMPARE(namedPanel.settings(2).placement, PiecePlacement::Front);
 }
 
 QTEST_MAIN(TST_Seamly3D)

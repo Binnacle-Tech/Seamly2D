@@ -616,6 +616,36 @@ PiecePlacement PieceArrangement::guessFromShape(const QPolygonF &outline)
 }
 
 //---------------------------------------------------------------------------------------------------------------------
+double PieceArrangement::neckDepth(const QPolygonF &outline)
+{
+    if (outline.size() < 3)
+    {
+        return 0;
+    }
+    const QRectF bounds = outline.boundingRect();
+    int top = 0;
+    for (int i = 1; i < outline.size(); ++i)
+    {
+        if (outline.at(i).y() < outline.at(top).y())
+        {
+            top = i;
+        }
+    }
+    // The center line is the side the neck is on; its top, where the neckline meets it.
+    const bool left = outline.at(top).x() - bounds.left() < bounds.right() - outline.at(top).x();
+    const double side = left ? bounds.left() : bounds.right();
+    double centerTop = std::numeric_limits<double>::max();
+    for (const QPointF &point : outline)
+    {
+        if (qAbs(point.x() - side) < 0.5)
+        {
+            centerTop = qMin(centerTop, point.y());
+        }
+    }
+    return centerTop < std::numeric_limits<double>::max() ? centerTop - outline.at(top).y() : 0.0;
+}
+
+//---------------------------------------------------------------------------------------------------------------------
 QString PieceArrangement::displayName(PiecePlacement placement)
 {
     switch (placement)

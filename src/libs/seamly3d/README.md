@@ -48,7 +48,7 @@ context on Windows, macOS and Linux.
 | `Workspace3DWindow` | The 3D workspace window. It shows the body built from the measurements (rebuilt live as values change, with the girths measured back off the model in the status bar), or an imported OBJ body, and runs the sewing and draping. |
 | `PatternSource` / `PatternProvider` | Read-only access to the open pattern; the window takes any provider, so tests can feed it pieces. |
 | `PieceMesher`, `PieceArrangement`, `BodyFrame`, `PatternPiecesPanel` | Pieces turned into meshes, placed around the body (torso, arms, legs, waist, neck) by name or by shape, and moved by hand (`PieceAdjustment`); the panel to arrange them, edit the seams and choose the fabric and fit map. |
-| `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (the piece's sides), and the seams found between those edges: one to one, sleeves of one piece or two set into armholes of any number of pieces, waistbands and collars along waistlines and necklines, an under collar to its upper collar, one edge to several (a yoke to the panels below it). |
+| `GarmentPanel`, `Seam`, `SeamFinder` | The pieces in 3D with their edges (the piece's sides), and the seams found between those edges: one to one, sleeves of one piece or two set into armholes of any number of pieces, waistbands and collars along waistlines and necklines, hem bands along hems, an under collar to its upper collar, one edge to several (a yoke to the panels below it). |
 | `ClothSimulator`, `BodyCollider`, `FabricPreset` | Sews the pieces together and drapes them on the body (XPBD), keeping the cloth off the body and the floor, in the chosen fabric (per piece, along each piece's grain). Gives the stretch and ease of the draped garment. |
 | `FitMap` | Colors for the fit maps and their legend. |
 | `MeasurementGuideWidget` / `MeasurementGuideDialog` | Where to take each measurement, using Seamly2D's diagrams. |
@@ -160,6 +160,10 @@ and draping:
   its mirrored copy the other half (**Flip** turns it end for end). The
   waist and the neck are found on the body shown. A band drawn upright in
   the pattern is turned, its left side on top.
+* **Hem bands:** a waistband on a garment with nothing below the waist (a
+  jacket, a top: no skirt, no trousers) is a hem band. It goes at the bottom
+  of the bodice pieces, its top where their hems are, and its upper edge is
+  sewn along the hems all the way round.
 * Where a piece goes is guessed from its name (front, back, sleeve, skirt,
   trouser, pants, waistband, collar, yoke..., also in German, French,
   Spanish, Dutch and Italian). Short words count at the start of a word, so
@@ -171,8 +175,10 @@ and draping:
   cuffs, yokes) and long upright strips (facings) beside the body, long flat
   strips as waistbands (50 cm and more) or collars, pieces with a domed top
   in the middle as sleeves, pieces 80 cm long and more as trouser legs, the
-  rest on the front. Two-piece sleeves have a lopsided cap and are not told
-  from body panels by shape; front from back is not guessed either.
+  rest on the front. Of two such pieces both put on the front, the one whose
+  neckline dips less at the center (the back neck is shallow, the front deep:
+  3 cm apart or more) goes on the back. Two-piece sleeves have a lopsided cap
+  and are not told from body panels by shape.
 * **Sleeves** go round the arm with the left of the pattern to the front, as
   sleeves are drawn (a two-piece sleeve's front seam, the lower end of its
   cap, on the left). The sleeve on the other arm is the mirror image.
@@ -243,22 +249,22 @@ The status line says how sewing goes; its tooltip lists the seams sewn.
   or several (a top sleeve's cap, then the under sleeve's across the seams
   between them); so is an armhole, made of any number of pieces (the front
   and back, or a yoke and the panels below it). The opening at the top of a
-  sleeve is sewn into the armhole on its side that it is as long as, or up to
-  15% longer (the ease): the top of the cap (its highest point in the
+  sleeve is sewn into the armhole on its side that it is as long as, or up
+  to 15% longer (the ease): the top of the cap (its highest point in the
   pattern) at the top of the armhole (the shoulder), the rest shared out
   evenly round both from there, front to front. A one-piece cap into an
   armhole of two edges goes from the underarm instead, its ends at the side
-  seam. Then each waistband or collar is sewn on: its lower
-  edge along every edge still open within 20 cm of it and at its height
-  (from 12 cm below to 5 cm above: the waistlines, the necklines), in order
-  around the body, each edge taking a share of the band as long as itself;
-  half a band takes the edges on its side only. A second band lying on the
-  first (an under collar on its upper collar) is sewn round to it, edge by
-  edge. Last, an edge still open is sewn to the open edges of other pieces
-  lying along it (within 5 cm) when they are as long as it together (within
-  8%): a yoke's lower edge to the tops of the panels below it. Without
-  these, necklines and waistlines (a straight top edge) stay open; hems
-  always do.
+  seam. Then each waistband or collar is sewn on: its lower edge along every
+  edge still open within 20 cm of it and at its height (from 12 cm below to
+  5 cm above: the waistlines, the necklines), in order around the body, each
+  edge taking a share of the band as long as itself; half a band takes the
+  edges on its side only. A hem band is sewn the other way up: its upper
+  edge along the hems above it. A second band lying on the first (an under
+  collar on its upper collar) is sewn round to it, edge by edge. Last, an
+  edge still open is sewn to the open edges of other pieces lying along it
+  (within 5 cm) when they are as long as it together (within 8%): a yoke's
+  lower edge to the tops of the panels below it. Without these, necklines
+  and waistlines (a straight top edge) stay open; hems always do.
 * **Seams list:** every seam, with its color. Uncheck a seam to leave it open;
   **Add Seam...** sews two edges you pick (each listed with its length, and
   shown in yellow in 3D while you choose; the ends that meet are chosen from
@@ -504,14 +510,14 @@ around it → sew → simulate → check the fit → edit in 2D and see it in 3D
 
 In order, because each one unblocks real patterns rather than test ones.
 FreeSewing's Devon jacket, imported from SVG, now hangs on the body as a
-jacket: yokes, front and back panels, collar, and both two-piece sleeves set
-into armholes made of four pieces each, each piece stretching along its own
-grain, its layers kept off each other. But:
+jacket: yokes, front and back panels, collar, both two-piece sleeves set
+into armholes made of four pieces each, and the hem band round the hem, each
+piece stretching along its own grain, its layers kept off each other. But:
 
-1. **Arrange from the pattern itself:** use grainlines and notches to tell
-   which way a piece goes, two-piece sleeves and front from back by shape,
-   and where a band goes. Devon's "waistband" is the jacket's hem band: with
-   nothing open at the waist it takes the pocket openings instead.
+1. **Arrange from the pattern itself, further:** use grainlines and notches
+   to tell which way up a piece goes, and two-piece sleeves from body panels
+   by shape. (Hem bands, and fronts from backs by their necks, are done:
+   Devon's "waistband" is now sewn round its hem.)
 2. **Several garments at once**, in layers (a shirt tucked into trousers),
    and collars that fold over: self collision is there, garments and fold
    lines are not.
@@ -550,8 +556,10 @@ grain, its layers kept off each other. But:
 - [ ] Use grainlines and notches for orientation: which way is up, which
   edge is the center line or the side seam (now guessed from the shape,
   with **Flip** and **Turn** to correct it)
-- [ ] Tell two-piece sleeves from body panels, and fronts from backs, by
-  shape (of two pieces on an arm, the under sleeve is told already)
+- [x] Fronts from backs by the depth of their necks, for pieces whose names
+  do not say; hem bands told from waistbands
+- [ ] Tell two-piece sleeves from body panels by shape (of two pieces on an
+  arm, the under sleeve is told already)
 - [ ] Bands drawn upright in the pattern: tell their top from their bottom
 - [ ] Place cuffs (round the wrist), pockets and facings
 - [ ] Several garments at once, in layers (a shirt under trousers)

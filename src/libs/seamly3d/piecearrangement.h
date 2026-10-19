@@ -165,6 +165,13 @@ public:
      */
     static PiecePlacement guessFromShape(const QPolygonF &outline);
 
+    /**
+     * @brief neckDepth is how far the neckline of a bodice piece drawn upright dips at the center (centimeters): from
+     * its highest point (the neck side) down to the top of the side nearest to it (the center front or back). A front
+     * neck is much deeper than a back neck.
+     */
+    static double neckDepth(const QPolygonF &outline);
+
     /** @brief isYoke tells a yoke by its name: it goes on top of the front or back, the other pieces there below it. */
     static bool isYoke(const QString &name);
 

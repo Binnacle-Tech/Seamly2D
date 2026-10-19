@@ -687,6 +687,7 @@ void PatternPiecesPanel::setPieces(const QVector<PatternPiece> &pieces)
     m_pieces = pieces;
     m_flatPieces.clear();
 
+    QVector<const PatternPiece *> fronts; // new pieces put on the front by their shape alone
     for (const PatternPiece &piece : m_pieces)
     {
         if (!m_settings.contains(piece.id))
@@ -695,6 +696,21 @@ void PatternPiecesPanel::setPieces(const QVector<PatternPiece> &pieces)
             s.placement = PieceArrangement::guess(piece.name, piece.seamLine);
             s.pair = piece.quantity >= 2 || piece.onFold;
             m_settings.insert(piece.id, s);
+            if (s.placement == PiecePlacement::Front
+                && PieceArrangement::guess(piece.name, QPolygonF()) == PiecePlacement::Aside)
+            {
+                fronts.append(&piece);
+            }
+        }
+    }
+    // Two of them, nothing in their names to tell them apart: the front's neck is the deeper one.
+    if (fronts.size() == 2)
+    {
+        const double a = PieceArrangement::neckDepth(fronts.at(0)->seamLine);
+        const double b = PieceArrangement::neckDepth(fronts.at(1)->seamLine);
+        if (qAbs(a - b) > 3.0)
+        {
+            m_settings[(a < b ? fronts.at(0) : fronts.at(1))->id].placement = PiecePlacement::Back;
         }
     }
 
@@ -1062,6 +1078,7 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
         }
     }
 
+    QVector<QVector<Mesh>> placedPieces;
     for (int i = 0; i < m_pieces.size(); ++i)
     {
         const PatternPiece &piece = m_pieces.at(i);
@@ -1082,14 +1099,68 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             adjustment.around += spread.value(piece.id);
         }
 
-        const QVector<Mesh> placed = PieceArrangement::place(flat.mesh, piece.seamLine.boundingRect(), s.placement,
-                                                             s.pair, flip, frame, asideStart, adjustment);
+        placedPieces.append(PieceArrangement::place(flat.mesh, piece.seamLine.boundingRect(), s.placement, s.pair,
+                                                    flip, frame, asideStart, adjustment));
         if (s.placement == PiecePlacement::Aside)
         {
             // Next piece in the row starts after this one (and its mirrored copy), with a gap.
             const auto width = static_cast<float>(piece.seamLine.boundingRect().width());
             asideStart += (s.pair ? 2 : 1) * (width + 15.0f);
         }
+    }
+
+    // A waistband on a garment with nothing below the waist (a jacket, a top) is a hem band: it goes at the bottom of
+    // the bodice, its top along the hems.
+    bool lower = false;
+    float hem = std::numeric_limits<float>::max();
+    for (int i = 0; i < m_pieces.size(); ++i)
+    {
+        switch (settings(m_pieces.at(i).id).placement)
+        {
+            case PiecePlacement::LowerFront:
+            case PiecePlacement::LowerBack:
+            case PiecePlacement::LeftLegFront:
+            case PiecePlacement::LeftLegBack:
+            case PiecePlacement::RightLegFront:
+            case PiecePlacement::RightLegBack:
+                lower = true;
+                break;
+            case PiecePlacement::Front:
+            case PiecePlacement::Back:
+            case PiecePlacement::LeftSide:
+            case PiecePlacement::RightSide:
+                for (const Mesh &mesh : placedPieces.at(i))
+                {
+                    hem = qMin(hem, mesh.bounds().minimum.y());
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    const bool hemBands = !lower && hem < std::numeric_limits<float>::max();
+    for (int i = 0; i < m_pieces.size(); ++i)
+    {
+        if (!hemBands || settings(m_pieces.at(i).id).placement != PiecePlacement::Waistband)
+        {
+            continue;
+        }
+        for (Mesh &mesh : placedPieces[i])
+        {
+            const float down = mesh.bounds().maximum.y() - hem;
+            for (QVector3D &p : mesh.positions)
+            {
+                p.setY(p.y() - down);
+            }
+        }
+    }
+
+    for (int i = 0; i < m_pieces.size(); ++i)
+    {
+        const PatternPiece &piece = m_pieces.at(i);
+        const Settings s = settings(piece.id);
+        const FlatPiece &flat = flatPiece(piece);
+        const QVector<Mesh> &placed = placedPieces.at(i);
         for (int copy = 0; copy < placed.size(); ++copy)
         {
             GarmentPanel panel;
@@ -1099,6 +1170,7 @@ QVector<GarmentPanel> PatternPiecesPanel::panels(const BodyFrame &frame) const
             panel.color = pieceColors[i % (sizeof(pieceColors) / sizeof(pieceColors[0]))];
             panel.sewable = s.placement != PiecePlacement::Aside;
             panel.band = s.placement == PiecePlacement::Waistband || s.placement == PiecePlacement::Collar;
+            panel.hemBand = hemBands && s.placement == PiecePlacement::Waistband;
             panel.sleeve = isSleeve(s.placement);
             panel.rest = flat.mesh;
             panel.shape = placed.at(copy);

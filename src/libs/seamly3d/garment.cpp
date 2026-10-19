@@ -341,7 +341,8 @@ void setInSleeves(const QVector<GarmentPanel> &panels, const QVector<EdgeInfo> &
 //---------------------------------------------------------------------------------------------------------------------
 /**
  * @brief Sews each waistband and collar on: its lower edge along the edges left open around it (waistlines,
- * necklines), in order around the body, each taking a share of the band as long as itself.
+ * necklines), in order around the body, each taking a share of the band as long as itself. A hem band the other way
+ * up: its upper edge along the hems above it.
  */
 void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used, QVector<Seam> &seams)
 {
@@ -353,7 +354,8 @@ void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used
             continue;
         }
 
-        // The lower of the band's long edges.
+        // The lower of the band's long edges (the upper one of a hem band).
+        const float up = band.hemBand ? -1.0f : 1.0f;
         double longest = 0;
         for (int e = 0; e < band.edgeCount(); ++e)
         {
@@ -374,7 +376,7 @@ void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used
                 height += band.shape.positions.at(v).y();
             }
             height /= static_cast<float>(vertices.size());
-            if (height < lowest)
+            if (lower < 0 || height * up < lowest * up)
             {
                 lowest = height;
                 lower = e;
@@ -438,7 +440,7 @@ void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used
             }
             for (int e = 0; e < panel.edgeCount(); ++e)
             {
-                if (used.contains(qMakePair(p, e)) || isHem(panel, e) || panel.edgeLength(e) < 2.0)
+                if (used.contains(qMakePair(p, e)) || (isHem(panel, e) && !band.hemBand) || panel.edgeLength(e) < 2.0)
                 {
                     continue;
                 }
@@ -451,7 +453,7 @@ void sewOnBands(const QVector<GarmentPanel> &panels, QSet<QPair<int, int>> &used
                     float distance = 0;
                     const QVector3D &point = panel.shape.positions.at(v);
                     project(point, &distance);
-                    const float below = lowest - point.y();
+                    const float below = (lowest - point.y()) * up; // away from the band, past its edge
                     near = near && distance <= SeamFinder::bandReach && below <= SeamFinder::bandDrop
                            && below >= -SeamFinder::bandRise;
                 }

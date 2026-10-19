@@ -55,6 +55,7 @@ struct GarmentPanel
     QColor       color{};
     bool         sewable{true};    ///< false for pieces hung beside the body
     bool         band{false};      ///< a waistband or collar: its lower edge is sewn along a waistline or neckline
+    bool         hemBand{false};   ///< a band at the hem instead: its upper edge is sewn along the hems above it
     bool         sleeve{false};    ///< a sleeve, or one piece of it: its cap is set into an armhole
     Mesh         rest{};
     Mesh         shape{};
@@ -116,7 +117,8 @@ struct Seam
  * Last, waistbands and collars are sewn on: the lower long edge of the band along every edge left open within reach
  * of it and at its height (the waistlines of a skirt or trousers, the necklines of a bodice; from bandDrop below to
  * bandRise above), in order around the body, each edge taking
- * a share of the band as long as itself. Half a band takes only the edges on its side of the body. A band left over
+ * a share of the band as long as itself. Half a band takes only the edges on its side of the body. A hem band is sewn
+ * the other way up: its upper edge along the hems above it (from bandDrop above to bandRise below). A band left over
  * (an under collar) is sewn round to the band it lies on (the upper collar), edge by edge.
  *
  * And an edge still open is sewn to the open edges of other pieces lying along it within partReach, when they are as
